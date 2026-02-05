@@ -1,18 +1,18 @@
 """
-universal_marathon_runner.py - Multi-User Campaign Processor
+universal_marathon_runner.py - Cron Job Runner for GitHub Actions
 
-This script runs as a background job (via GitHub Actions or Cron) and processes
-ALL active user campaigns. It uses the job_applications table to track applications.
+This script is executed by GitHub Actions every 6 hours.
+It processes ALL active user campaigns and saves results to the database.
 
-Schema Used:
-- profiles: User profiles with contact info
-- agent_states: Stores thought_signature, history, and campaign state in history JSON
-- job_applications: Tracks job applications with status (scouted, applied, etc.)
+Usage:
+  python universal_marathon_runner.py           # Run all active campaigns
+  python universal_marathon_runner.py --demo    # Create demo campaigns
 """
 
 import os
-import json
-from datetime import date, datetime
+import sys
+import base64
+from datetime import date, datetime, timezone
 from google import genai
 from google.genai import types
 from supabase import create_client
@@ -24,270 +24,284 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-MODEL_ID = "gemini-2.0-flash-thinking-exp"
+MODEL_ID = "gemini-3-flash-preview"
 
 
-def get_or_create_profile(full_name: str, email: str = None, summary: str = None):
-    """
-    Get existing profile or create a new one.
-    Returns the profile UUID.
-    """
-    # Check if profile exists
-    res = supabase.table("profiles").select("id").eq("full_name", full_name).execute()
+# ============== UTILITY FUNCTIONS ==============
+
+def encode_signature(sig):
+    """Encode signature bytes to base64 string."""
+    if sig and isinstance(sig, bytes):
+        return base64.b64encode(sig).decode('utf-8')
+    return sig
+
+
+def decode_signature(sig_b64):
+    """Decode base64 string to signature bytes."""
+    if sig_b64 and isinstance(sig_b64, str):
+        return base64.b64decode(sig_b64)
+    return sig_b64
+
+
+def log(msg: str):
+    """Print with timestamp."""
+    print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}")
+
+
+# ============== DATABASE OPERATIONS ==============
+
+def get_all_active_campaigns():
+    """Fetch all agent states with active campaigns."""
+    response = supabase.table("agent_states").select("*, profiles(*)").execute()
     
-    if res.data:
-        return res.data[0]['id']
+    active = []
+    for agent in response.data:
+        history = agent.get("history", [])
+        for item in history:
+            if isinstance(item, dict) and item.get("type") == "campaign_config":
+                if item.get("is_active", False):
+                    agent["_config"] = item
+                    active.append(agent)
+                break
     
-    # Create new profile
-    contact_info = {"email": email} if email else {}
-    new_profile = supabase.table("profiles").insert({
-        "full_name": full_name,
-        "contact_info": contact_info,
-        "summary": summary or f"Job seeker profile for {full_name}"
+    return active
+
+
+def save_agent_state(user_id: str, state: dict):
+    """Update agent state in database."""
+    state["last_updated"] = datetime.now(timezone.utc).isoformat()
+    return supabase.table("agent_states").update(state).eq("user_id", user_id).execute()
+
+
+def save_job_application(user_id: str, job: dict, cover_letter: str = None):
+    """Save a job application to the database."""
+    return supabase.table("job_applications").insert({
+        "user_id": user_id,
+        "job_title": job["title"],
+        "company_name": job["company"],
+        "source_url": job.get("url"),
+        "status": "scouted",
+        "replies_log": [{
+            "action": "scouted_by_cron",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "cover_letter_preview": cover_letter[:300] if cover_letter else None
+        }]
     }).execute()
-    
-    return new_profile.data[0]['id']
 
 
-def create_mission(full_name: str, job_role: str, jobs_per_day: int, duration_days: int, email: str = None):
-    """
-    Initialize a new mission/campaign for a user.
-    This function is called by your UI (Streamlit/React) when user submits the form.
+# ============== AI FUNCTIONS ==============
+
+def search_jobs_with_ai(query: str, profile: dict, location: str):
+    """Use AI to generate job search results based on user profile."""
     
-    Campaign config is stored in the history JSONB field as a special entry.
-    """
+    summary = profile.get("summary", "")
+    contact_info = profile.get("contact_info", {})
     
-    # Get or create user profile
-    user_id = get_or_create_profile(full_name, email, f"Looking for {job_role} positions")
+    prompt = f"""You are a job search assistant. Generate 5 realistic job listings matching this search.
+
+USER: {profile.get('full_name')}
+SUMMARY: {summary}
+LOCATION PREFERENCE: {location}
+
+JOB QUERY: {query}
+
+Return ONLY valid JSON array (no markdown):
+[
+  {{"title": "Job Title", "company": "Company", "location": "City", "url": "https://example.com/job", "match_score": 85, "description": "Brief description"}}
+]
+"""
     
-    # Campaign config stored in history as first entry
-    campaign_config = {
+    try:
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                thinking_config=types.ThinkingConfig(include_thoughts=True)
+            )
+        )
+        
+        # Extract signature
+        signature = None
+        if response.candidates and response.candidates[0].content.parts:
+            last_part = response.candidates[0].content.parts[-1]
+            if hasattr(last_part, 'thought_signature') and last_part.thought_signature:
+                signature = last_part.thought_signature
+        
+        # Parse response
+        import json
+        text = response.text.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        
+        jobs = json.loads(text.strip())
+        return jobs, signature
+        
+    except Exception as e:
+        log(f"  ⚠️ AI search failed: {e}")
+        # Return fallback jobs
+        return [
+            {"title": f"{query} Developer", "company": "Tech Company", "location": location, "url": "https://example.com/1", "match_score": 80, "description": f"{query} position"},
+            {"title": f"Senior {query}", "company": "Startup Inc", "location": location, "url": "https://example.com/2", "match_score": 75, "description": f"Senior {query} role"},
+        ], None
+
+
+def generate_cover_letter(job: dict, profile: dict):
+    """Generate a brief cover letter for a job."""
+    try:
+        prompt = f"""Write a brief 2-paragraph cover letter.
+
+JOB: {job.get('title')} at {job.get('company')}
+APPLICANT: {profile.get('full_name')}
+PROFILE: {profile.get('summary', 'Experienced professional')}
+
+Be professional and concise."""
+
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        log(f"  ⚠️ Cover letter failed: {e}")
+        return None
+
+
+# ============== MAIN PROCESSING ==============
+
+def process_single_campaign(agent_state: dict):
+    """Process one user's campaign."""
+    
+    user_id = agent_state.get("user_id")
+    profile = agent_state.get("profiles", {})
+    config = agent_state.get("_config", {})
+    history = agent_state.get("history", [])
+    
+    full_name = profile.get("full_name", user_id[:8])
+    current_day = config.get("current_day", 1)
+    total_days = config.get("total_days", 5)
+    daily_limit = config.get("daily_limit", 3)
+    target_role = config.get("target_role", "Software Developer")
+    location = config.get("location", "Remote")
+    
+    log(f"▶️ {full_name}: Day {current_day}/{total_days} - {target_role}")
+    
+    # Check if campaign is complete
+    if current_day > total_days:
+        log(f"  🏁 Campaign complete!")
+        config["is_active"] = False
+        save_agent_state(user_id, {"history": history})
+        return
+    
+    # Search for jobs
+    jobs, signature = search_jobs_with_ai(target_role, profile, location)
+    log(f"  📋 Found {len(jobs)} jobs")
+    
+    # Process jobs up to daily limit
+    jobs_processed = 0
+    for job in jobs[:daily_limit]:
+        log(f"  ✓ {job['title']} at {job['company']}")
+        
+        # Generate cover letter
+        cover_letter = generate_cover_letter(job, profile)
+        
+        # Save to database
+        try:
+            save_job_application(user_id, job, cover_letter)
+            jobs_processed += 1
+        except Exception as e:
+            log(f"  ⚠️ Failed to save: {e}")
+    
+    # Update campaign state
+    config["current_day"] = current_day + 1
+    config["jobs_applied_today"] = jobs_processed
+    
+    # Update history
+    history.append({
+        "role": "system",
+        "parts": [{"text": f"Day {current_day}: Processed {jobs_processed} jobs via cron"}],
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
+    
+    # Save state
+    save_agent_state(user_id, {
+        "thought_signature": encode_signature(signature) if signature else agent_state.get("thought_signature"),
+        "history": history,
+        "internal_summary": f"Cron Day {current_day}: {jobs_processed} jobs processed"
+    })
+    
+    log(f"  ✅ Day {current_day} complete: {jobs_processed} jobs saved")
+
+
+def run_all_campaigns():
+    """Main function to process all active campaigns."""
+    
+    log("=" * 50)
+    log("🚀 MARATHON AGENT - CRON JOB RUNNER")
+    log("=" * 50)
+    
+    active_campaigns = get_all_active_campaigns()
+    log(f"📊 Found {len(active_campaigns)} active campaigns")
+    
+    if not active_campaigns:
+        log("💤 No active campaigns to process")
+        return
+    
+    for agent_state in active_campaigns:
+        try:
+            process_single_campaign(agent_state)
+        except Exception as e:
+            user_id = agent_state.get("user_id", "unknown")
+            log(f"❌ Error processing {user_id[:8]}...: {e}")
+    
+    log("=" * 50)
+    log("✅ CRON JOB COMPLETE")
+    log("=" * 50)
+
+
+def create_demo_campaigns():
+    """Create demo campaigns for testing."""
+    
+    log("🎯 Creating demo campaigns...")
+    
+    # Demo user 1
+    profile1 = supabase.table("profiles").upsert({
+        "full_name": "Demo User Python",
+        "contact_info": {"email": "demo1@example.com", "location": "Karachi"},
+        "summary": "Python developer with 3 years experience in Django and FastAPI"
+    }, on_conflict="full_name").execute()
+    
+    user_id = profile1.data[0]["id"]
+    
+    config = {
         "type": "campaign_config",
-        "target_role": job_role,
-        "daily_limit": jobs_per_day,
-        "total_days": duration_days,
+        "target_role": "Python Developer",
+        "daily_limit": 3,
+        "total_days": 3,
+        "location": "Karachi",
         "start_date": str(date.today()),
         "current_day": 1,
         "jobs_applied_today": 0,
         "is_active": True
     }
-
-    # Initialize the agent in Supabase
-    result = supabase.table("agent_states").upsert({
+    
+    supabase.table("agent_states").upsert({
         "user_id": user_id,
         "thought_signature": None,
-        "internal_summary": f"Mission Started: {job_role} for {duration_days} days.",
+        "internal_summary": "Demo campaign created",
         "thinking_level": "low",
-        "history": [campaign_config]  # Store config as first history entry
+        "history": [config]
     }, on_conflict="user_id").execute()
     
-    print(f"✅ Mission initialized for {full_name} ({user_id[:8]}...): {job_role}, {jobs_per_day}/day for {duration_days} days")
-    return result
+    log(f"✅ Created demo campaign for: Demo User Python")
+    log(f"   Target: Python Developer, 3 jobs/day for 3 days")
 
 
-def scout_jobs(query: str, location: str = "Remote"):
-    """
-    Placeholder function to scout for jobs.
-    In production, this would call job APIs (LinkedIn, Indeed, etc.)
-    """
-    # Simulate finding jobs
-    return [
-        {"title": f"{query} Developer", "company": "Tech Corp", "location": location, "url": "https://example.com/job1"},
-        {"title": f"Senior {query}", "company": "StartupXYZ", "location": location, "url": "https://example.com/job2"},
-        {"title": f"Junior {query}", "company": "BigCo", "location": location, "url": "https://example.com/job3"},
-    ]
-
-
-def get_campaign_config(history: list) -> dict:
-    """
-    Extract campaign config from history.
-    The config is stored as the first entry with type='campaign_config'.
-    """
-    for entry in history:
-        if isinstance(entry, dict) and entry.get('type') == 'campaign_config':
-            return entry
-    return None
-
-
-def run_all_user_campaigns():
-    """Process all active user campaigns."""
-    
-    # 1. Fetch ALL agent states with their profiles
-    response = supabase.table("agent_states").select("*, profiles(full_name)").execute()
-    
-    # Filter for active campaigns (check history for campaign_config with is_active=True)
-    active_agents = []
-    for agent in response.data:
-        config = get_campaign_config(agent.get('history', []))
-        if config and config.get('is_active', False):
-            active_agents.append(agent)
-    
-    print(f"🚀 Found {len(active_agents)} active missions to process.")
-
-    for agent_state in active_agents:
-        try:
-            process_single_agent(agent_state)
-        except Exception as e:
-            print(f"❌ Error processing user {agent_state.get('user_id')}: {e}")
-
-
-def process_single_agent(state: dict):
-    """Process a single user's campaign according to their configuration."""
-    
-    user_id = state.get('user_id')
-    history = state.get('history', [])
-    config = get_campaign_config(history)
-    
-    if not config:
-        print(f"⚠️ User {user_id[:8]}...: No campaign config found.")
-        return
-    
-    profile_name = state.get('profiles', {}).get('full_name', 'Unknown')
-    
-    # --- RULE CHECKING ENGINE ---
-    
-    # Rule 1: Is the marathon over?
-    if config.get('current_day', 1) > config.get('total_days', 1):
-        print(f"🏁 {profile_name}: Mission Complete.")
-        config['is_active'] = False
-        update_agent_state(user_id, history, "Mission Finished!")
-        return
-
-    # Rule 2: Did we already finish today's quota?
-    if config.get('jobs_applied_today', 0) >= config.get('daily_limit', 3):
-        print(f"💤 {profile_name}: Daily quota met.")
-        return
-
-    # --- EXECUTION ENGINE ---
-    
-    target_role = config.get('target_role', 'Software Developer')
-    daily_limit = config.get('daily_limit', 3)
-    current_day = config.get('current_day', 1)
-    
-    print(f"▶️ {profile_name}: Day {current_day} - Finding {daily_limit} jobs for '{target_role}'...")
-    
-    # 1. Scout (Using the USER'S target role)
-    jobs = scout_jobs(query=target_role, location="Remote")
-    
-    # 2. Process jobs (Loop until we hit THE USER'S daily limit)
-    jobs_processed = 0
-    for job in jobs:
-        if jobs_processed >= daily_limit:
-            break
-        
-        # Generate cover letter using Gemini
-        prompt = f"Write a brief, professional cover letter for the position: {job['title']} at {job['company']}"
-        
-        try:
-            response = client.models.generate_content(
-                model=MODEL_ID,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    thinking_config=types.ThinkingConfig(include_thoughts=True)
-                )
-            )
-            
-            cover_letter = response.text
-            print(f"  ✓ Generated cover letter for {job['title']} at {job['company']}")
-            
-            # Save application to job_applications table
-            supabase.table("job_applications").insert({
-                "user_id": user_id,
-                "job_title": job['title'],
-                "company_name": job['company'],
-                "source_url": job.get('url'),
-                "status": "scouted",
-                "replies_log": [{"action": "cover_letter_generated", "content": cover_letter[:500], "timestamp": datetime.utcnow().isoformat()}]
-            }).execute()
-            
-        except Exception as e:
-            print(f"  ✗ Error generating cover letter: {e}")
-        
-        jobs_processed += 1
-
-    # --- STATE UPDATE ENGINE ---
-    
-    config['jobs_applied_today'] = jobs_processed
-    config['current_day'] = current_day + 1
-    
-    # Reset daily counter for next day
-    config['jobs_applied_today'] = 0
-    
-    # Add a history entry for this run
-    history.append({
-        "type": "daily_run",
-        "day": current_day,
-        "jobs_processed": jobs_processed,
-        "timestamp": datetime.utcnow().isoformat()
-    })
-    
-    update_agent_state(user_id, history, f"Day {current_day}: Applied to {jobs_processed} jobs.")
-    print(f"✅ {profile_name}: Day {current_day} complete. Applied to {jobs_processed} jobs.")
-
-
-def update_agent_state(user_id: str, history: list, summary: str):
-    """Update the user's agent state in Supabase."""
-    
-    supabase.table("agent_states").update({
-        "history": history,
-        "internal_summary": summary,
-        "last_updated": datetime.utcnow().isoformat()
-    }).eq("user_id", user_id).execute()
-
-
-# --- Demo Functions ---
-
-def demo_create_missions():
-    """Create sample missions for testing."""
-    
-    # User A: Conservative approach
-    create_mission(
-        full_name="Alice Developer",
-        job_role="Python Developer",
-        jobs_per_day=3,
-        duration_days=3,
-        email="alice@example.com"
-    )
-    
-    # User B: Aggressive approach
-    create_mission(
-        full_name="Bob Analyst",
-        job_role="SQL Analyst",
-        jobs_per_day=10,
-        duration_days=4,
-        email="bob@example.com"
-    )
-
-
-def show_applications(full_name: str = None):
-    """Show job applications for a user or all users."""
-    
-    if full_name:
-        # Get user_id from profile
-        profile = supabase.table("profiles").select("id").eq("full_name", full_name).execute()
-        if not profile.data:
-            print(f"No profile found for {full_name}")
-            return
-        
-        user_id = profile.data[0]['id']
-        apps = supabase.table("job_applications").select("*").eq("user_id", user_id).execute()
-    else:
-        apps = supabase.table("job_applications").select("*, profiles(full_name)").execute()
-    
-    print(f"\n📋 Job Applications ({len(apps.data)} total):")
-    for app in apps.data:
-        print(f"  - {app['job_title']} at {app['company_name']} [{app['status']}]")
-
+# ============== MAIN ==============
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--demo":
-            print("🎯 Creating demo missions...")
-            demo_create_missions()
-        elif sys.argv[1] == "--show":
-            show_applications()
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+        create_demo_campaigns()
     else:
-        print("🏃 Running all user campaigns...")
-        run_all_user_campaigns()
+        run_all_campaigns()
