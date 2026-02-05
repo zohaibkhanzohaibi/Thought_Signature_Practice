@@ -6,6 +6,7 @@ and continues the task with full context preservation.
 """
 
 import os
+from datetime import datetime
 from google import genai
 from google.genai import types
 from supabase import create_client
@@ -23,8 +24,17 @@ MODEL_ID = "gemini-2.0-flash-thinking-exp"  # Use appropriate model with thinkin
 def resume_marathon():
     """Resume a marathon agent session from saved state."""
     
-    # 1. Fetch State from Supabase
-    res = supabase.table("agent_states").select("*").eq("user_id", "test_user_001").single().execute()
+    # 1. First get the test user's profile ID
+    profile_res = supabase.table("profiles").select("id").eq("full_name", "Test User").execute()
+    
+    if not profile_res.data:
+        print("❌ No profile found. Run turn_1_plan.py first.")
+        return
+    
+    user_id = profile_res.data[0]['id']
+    
+    # 2. Fetch State from Supabase using the profile ID
+    res = supabase.table("agent_states").select("*").eq("user_id", user_id).single().execute()
     
     if not res.data:
         print("❌ No saved state found for this user. Run turn_1_plan.py first.")
@@ -32,11 +42,11 @@ def resume_marathon():
     
     state = res.data
     
-    # 2. Rehydrate History (Crucial: Include the Signature in the previous model turn)
+    # 3. Rehydrate History (Crucial: Include the Signature in the previous model turn)
     history = state['history']
     
     print(f"📜 Loaded {len(history)} messages from history")
-    print(f"🔐 Previous signature: {state['last_signature'][:50] if state.get('last_signature') else 'None'}...")
+    print(f"🔐 Previous signature: {state['thought_signature'][:50] if state.get('thought_signature') else 'None'}...")
     
     # 3. Ask for Step 2
     new_prompt = "Great, let's proceed with Step 2 of the plan."
@@ -88,9 +98,11 @@ def resume_marathon():
     
     # 6. Save updated state to Supabase
     supabase.table("agent_states").update({
-        "last_signature": new_signature,
-        "history": history
-    }).eq("user_id", "test_user_001").execute()
+        "thought_signature": new_signature,
+        "history": history,
+        "internal_summary": f"Continued plan: {response.text[:100]}...",
+        "last_updated": datetime.utcnow().isoformat()
+    }).eq("user_id", user_id).execute()
     
     print("\n✅ State updated in Supabase.")
 

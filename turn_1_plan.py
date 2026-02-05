@@ -53,16 +53,33 @@ def start_marathon():
         print("\nNo thought signature captured (model may not support it)")
 
     # 3. Save to Supabase (State Persistence)
+    # First, get or create a profile for the test user
+    profile_res = supabase.table("profiles").select("id").eq("full_name", "Test User").execute()
+    
+    if profile_res.data:
+        user_id = profile_res.data[0]['id']
+    else:
+        # Create a new profile
+        new_profile = supabase.table("profiles").insert({
+            "full_name": "Test User",
+            "contact_info": {"email": "test@example.com"},
+            "summary": "Test user for marathon agent"
+        }).execute()
+        user_id = new_profile.data[0]['id']
+    
     state_data = {
-        "user_id": "test_user_001",
-        "last_signature": signature,
+        "user_id": user_id,
+        "thought_signature": signature,
+        "internal_summary": f"Plan created: {model_text[:100]}...",
+        "thinking_level": "low",
         "history": [
             {"role": "user", "parts": [{"text": user_prompt}]},
             {"role": "model", "parts": [{"text": model_text, "thought_signature": signature}]}
         ]
     }
     
-    result = supabase.table("agent_states").upsert(state_data).execute()
+    # Upsert based on user_id
+    result = supabase.table("agent_states").upsert(state_data, on_conflict="user_id").execute()
     print("\n✅ State saved to Supabase. Script exiting...")
     
     return result
