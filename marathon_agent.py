@@ -170,6 +170,7 @@ Return ONLY a JSON array in this format (no markdown, no explanation):
   {{"title": "Job Title", "company": "Company Name", "location": "City", "url": "https://example.com/job1", "match_score": 85, "description": "Brief job description", "requirements": ["Skill1", "Skill2"], "posted_date": "2 days ago"}},
   ...
 ]
+
 For posted_date, use realistic relative times like "Today", "Yesterday", "2 days ago", "1 week ago", etc.
 Focus on jobs in {location} or Remote positions. Match the user's skill level and experience.
 """
@@ -460,7 +461,7 @@ def run_campaign_iteration(user_id: str = None):
     history.append({"role": "user", "parts": [{"text": new_prompt}]})
     history.append({"role": "model", "parts": [{"text": response_text, "thought_signature": encode_signature(new_signature)}]})
     
-    # Get fresh jobs
+    # Get fresh jobs (request more to account for duplicates)
     jobs, _ = search_jobs_with_ai(config.get("target_role"), profile, config.get("location"))
     
     # Get previously applied jobs to filter duplicates
