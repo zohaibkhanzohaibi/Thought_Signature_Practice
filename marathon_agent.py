@@ -102,6 +102,21 @@ def get_user_applications(user_id: str):
     return supabase.table("job_applications").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
 
 
+def get_applied_job_keys(user_id: str) -> set:
+    """Get a set of unique job keys (company|title) that have already been applied to."""
+    apps = get_user_applications(user_id)
+    applied_keys = set()
+    for app in apps.data:
+        key = f"{app['company_name'].lower().strip()}|{app['job_title'].lower().strip()}"
+        applied_keys.add(key)
+    return applied_keys
+
+
+def get_job_key(job: dict) -> str:
+    """Generate a unique key for a job based on company and title."""
+    return f"{job['company'].lower().strip()}|{job['title'].lower().strip()}"
+
+
 # ============== AI FUNCTIONS ==============
 
 def encode_signature(sig):
@@ -139,10 +154,11 @@ JOB SEARCH QUERY: {query}
 
 Return the jobs in this EXACT JSON format (no markdown, just raw JSON):
 [
-  {{"title": "Job Title", "company": "Company Name", "location": "City", "url": "https://example.com/job1", "match_score": 85, "description": "Brief job description", "requirements": ["Skill1", "Skill2"]}},
+  {{"title": "Job Title", "company": "Company Name", "location": "City", "url": "https://example.com/job1", "match_score": 85, "description": "Brief job description", "requirements": ["Skill1", "Skill2"], "posted_date": "2 days ago"}},
   ...
 ]
 
+For posted_date, use realistic relative times like "Today", "Yesterday", "2 days ago", "1 week ago", etc.
 Focus on jobs in {location} or Remote positions. Match the user's skill level and experience.
 """
     
@@ -177,9 +193,9 @@ Focus on jobs in {location} or Remote positions. Match the user's skill level an
     except:
         # Fallback to mock jobs if parsing fails
         jobs = [
-            {"title": f"{query} Developer", "company": "Tech Solutions Karachi", "location": location, "url": "https://example.com/job1", "match_score": 90, "description": f"Looking for {query} professional", "requirements": TEST_USER["skills"][:3]},
-            {"title": f"Senior {query} Analyst", "company": "Data Corp Pakistan", "location": location, "url": "https://example.com/job2", "match_score": 85, "description": f"Senior {query} role", "requirements": TEST_USER["skills"][:2]},
-            {"title": f"Junior {query} Specialist", "company": "StartUp Hub", "location": "Remote", "url": "https://example.com/job3", "match_score": 75, "description": f"Entry level {query} position", "requirements": [TEST_USER["skills"][0]]},
+            {"title": f"{query} Developer", "company": "Tech Solutions Karachi", "location": location, "url": "https://example.com/job1", "match_score": 90, "description": f"Looking for {query} professional", "requirements": TEST_USER["skills"][:3], "posted_date": "Today"},
+            {"title": f"Senior {query} Analyst", "company": "Data Corp Pakistan", "location": location, "url": "https://example.com/job2", "match_score": 85, "description": f"Senior {query} role", "requirements": TEST_USER["skills"][:2], "posted_date": "2 days ago"},
+            {"title": f"Junior {query} Specialist", "company": "StartUp Hub", "location": "Remote", "url": "https://example.com/job3", "match_score": 75, "description": f"Entry level {query} position", "requirements": [TEST_USER["skills"][0]], "posted_date": "1 week ago"},
         ]
     
     return jobs, signature
@@ -342,8 +358,9 @@ def create_campaign_form():
     # Save initial job applications
     print(f"\n✅ Found {len(jobs)} matching jobs:\n")
     for i, job in enumerate(jobs[:jobs_per_day], 1):
+        posted = job.get('posted_date', 'Unknown')
         print(f"  {i}. {job['title']} at {job['company']} ({job.get('location', 'N/A')})")
-        print(f"     Match Score: {job.get('match_score', 'N/A')}%")
+        print(f"     Match Score: {job.get('match_score', 'N/A')}% | Posted: {posted}")
         save_job_application(user_id, job)
     
     print(f"\n✅ Campaign created successfully!")
@@ -418,16 +435,34 @@ def run_campaign_iteration(user_id: str = None):
     history.append({"role": "user", "parts": [{"text": new_prompt}]})
     history.append({"role": "model", "parts": [{"text": response_text, "thought_signature": encode_signature(new_signature)}]})
     
-    # Get fresh jobs
+    # Get fresh jobs (request more to account for duplicates)
     jobs, _ = search_jobs_with_ai(config.get("target_role"), profile, config.get("location"))
+    
+    # Get previously applied jobs to filter duplicates
+    applied_keys = get_applied_job_keys(user_id)
+    
+    # Filter out already-applied jobs
+    new_jobs = []
+    for job in jobs:
+        job_key = get_job_key(job)
+        if job_key not in applied_keys:
+            new_jobs.append(job)
+        else:
+            print(f"  ⏭ Skipping duplicate: {job['title']} at {job['company']}")
+    
+    if not new_jobs:
+        print("\n⚠️ No new jobs found. All results were duplicates.")
+        print("   Try running again later or adjust your search criteria.")
+        return
     
     # Process and save jobs
     jobs_processed = 0
     daily_limit = config.get("daily_limit", 3)
     
-    print(f"\n📋 Processing {min(len(jobs), daily_limit)} jobs:\n")
-    for job in jobs[:daily_limit]:
-        print(f"  ▶ {job['title']} at {job['company']}")
+    print(f"\n📋 Processing {min(len(new_jobs), daily_limit)} new jobs:\n")
+    for job in new_jobs[:daily_limit]:
+        posted = job.get('posted_date', 'Unknown')
+        print(f"  ▶ {job['title']} at {job['company']} (Posted: {posted})")
         
         # Generate cover letter
         try:
