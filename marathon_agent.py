@@ -12,6 +12,7 @@ Usage:
   python marathon_agent.py --create    # Create a new campaign (interactive form)
   python marathon_agent.py --run       # Run one iteration for test user
   python marathon_agent.py --status    # Check campaign status
+  python marathon_agent.py --list      # List all campaigns
 """
 
 import os
@@ -118,38 +119,51 @@ def decode_signature(sig_b64):
     return sig_b64
 
 
-def search_jobs_with_ai(query: str, user_profile: dict, location: str = None):
+def search_jobs_with_ai(query: str, user_profile: dict, location: str = None, exclude_jobs: list = None):
     """
-    Use AI to generate job search results based on user query and profile.
-    In production, this would integrate with real job APIs.
+    Use AI with Google Search grounding to find REAL jobs from the internet.
+    Uses Gemini's built-in web search capability for live job listings.
+    Excludes previously scouted/applied jobs.
     """
     location = location or user_profile.get("contact_info", {}).get("location", "Remote")
     
-    prompt = f"""You are a job search assistant. Based on the following user profile and job query, 
-generate 5 realistic job listings that would be good matches.
+    # Build exclusion list
+    exclude_section = ""
+    if exclude_jobs:
+        exclude_list = "\n".join([f"- {job['job_title']} at {job['company_name']}" for job in exclude_jobs[:20]])
+        exclude_section = f"\n\nDO NOT include these jobs (already applied/scouted):\n{exclude_list}\n"
+    
+    prompt = f"""Search the internet for REAL, currently open job listings matching these criteria:
 
-USER PROFILE:
-- Name: {user_profile.get('full_name')}
-- Skills: {TEST_USER['skills']}
-- Experience: {TEST_USER['experience_years']} years
-- Location: {location}
-- Summary: {user_profile.get('summary')}
+JOB SEARCH: {query}
+LOCATION: {location} (include remote positions)
+EXPERIENCE LEVEL: {TEST_USER['experience_years']} years
+SKILLS: {', '.join(TEST_USER['skills'])}{exclude_section}
 
-JOB SEARCH QUERY: {query}
+Find 5 actual job postings from job boards like LinkedIn, Indeed, Glassdoor, Rozee.pk, or company career pages.
 
-Return the jobs in this EXACT JSON format (no markdown, just raw JSON):
+For each job found, extract:
+- Job title
+- Company name  
+- Location
+- Application URL (the actual job posting link)
+- Key requirements
+- Match score (0-100) based on the candidate's skills
+
+Return ONLY a JSON array in this format (no markdown, no explanation):
 [
-  {{"title": "Job Title", "company": "Company Name", "location": "City", "url": "https://example.com/job1", "match_score": 85, "description": "Brief job description", "requirements": ["Skill1", "Skill2"]}},
+  {{"title": "Job Title", "company": "Company Name", "location": "City", "url": "https://actual-job-url.com", "match_score": 85, "description": "Brief description", "requirements": ["Skill1", "Skill2"]}},
   ...
 ]
 
-Focus on jobs in {location} or Remote positions. Match the user's skill level and experience.
-"""
+Focus on jobs posted in the last 7 days. Include the REAL application URLs."""
     
+    # Use Google Search grounding for real web results
     response = client.models.generate_content(
         model=MODEL_ID,
         contents=prompt,
         config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
             thinking_config=types.ThinkingConfig(include_thoughts=True)
         )
     )
@@ -349,7 +363,7 @@ def create_campaign_form():
     print(f"\n✅ Campaign created successfully!")
     print(f"   📧 Jobs saved to database")
     print(f"   🔄 Marathon runner will process {jobs_per_day} jobs/day for {duration_days} days")
-    print(f"   ⏰ Cron job runs every 6 hours automatically")
+    print(f"   ⏰ Cron job runs daily at 2 AM UTC")
     
     return campaign_config
 
@@ -390,17 +404,28 @@ def run_campaign_iteration(user_id: str = None):
     current_day = config.get("current_day", 1)
     total_days = config.get("total_days", 5)
     
+    # Check if campaign is already complete
     if current_day > total_days:
         config["is_active"] = False
         save_agent_state(user_id, state)
         print("🏁 Campaign completed!")
         return
     
-    print(f"\n📅 Day {current_day}/{total_days} of campaign")
+    # Check if this is the last day
+    is_last_day = (current_day == total_days)
+    
+    print(f"\n📅 Day {current_day}/{total_days} of campaign" + (" (FINAL DAY)" if is_last_day else ""))
     print(f"🎯 Target: {config.get('target_role')} in {config.get('location')}")
     
+    # Get previous applications to exclude from search
+    previous_apps = get_user_applications(user_id)
+    exclude_jobs = previous_apps.data if previous_apps.data else []
+    
+    if exclude_jobs:
+        print(f"📋 Excluding {len(exclude_jobs)} previously scouted jobs")
+    
     # Use signature to continue conversation
-    new_prompt = f"Day {current_day}: Find me {config.get('daily_limit')} more {config.get('target_role')} jobs in {config.get('location')}. Focus on the latest openings."
+    new_prompt = f"Day {current_day}: Find me {config.get('daily_limit')} NEW {config.get('target_role')} jobs in {config.get('location')}. Focus on the latest openings not previously shown."
     
     if state.get("thought_signature"):
         print("🔐 Resuming with saved thought signature...")
@@ -410,7 +435,8 @@ def run_campaign_iteration(user_id: str = None):
         jobs, new_signature = search_jobs_with_ai(
             config.get("target_role"),
             profile,
-            config.get("location")
+            config.get("location"),
+            exclude_jobs=exclude_jobs
         )
         response_text = f"Found {len(jobs)} jobs for day {current_day}"
     
@@ -418,8 +444,8 @@ def run_campaign_iteration(user_id: str = None):
     history.append({"role": "user", "parts": [{"text": new_prompt}]})
     history.append({"role": "model", "parts": [{"text": response_text, "thought_signature": encode_signature(new_signature)}]})
     
-    # Get fresh jobs
-    jobs, _ = search_jobs_with_ai(config.get("target_role"), profile, config.get("location"))
+    # Get fresh jobs (excluding previous ones)
+    jobs, _ = search_jobs_with_ai(config.get("target_role"), profile, config.get("location"), exclude_jobs=exclude_jobs)
     
     # Process and save jobs
     jobs_processed = 0
@@ -445,14 +471,27 @@ def run_campaign_iteration(user_id: str = None):
     config["current_day"] = current_day + 1
     config["jobs_applied_today"] = jobs_processed
     
+    # Mark campaign complete on last day
+    if is_last_day:
+        config["is_active"] = False
+        config["completed_date"] = str(date.today())
+    
     state["thought_signature"] = encode_signature(new_signature)
     state["internal_summary"] = f"Day {current_day}: Processed {jobs_processed} jobs"
     state["history"] = history
     
     save_agent_state(user_id, state)
     
-    print(f"\n✅ Day {current_day} complete! Processed {jobs_processed} jobs.")
-    print(f"   Next run: Day {current_day + 1}")
+    if is_last_day:
+        total_apps = get_user_applications(user_id)
+        total_count = len(total_apps.data) if total_apps.data else 0
+        print(f"\n🏁 Campaign COMPLETED!")
+        print(f"   📊 Total jobs scouted: {total_count}")
+        print(f"   📅 Duration: {total_days} days")
+        print(f"   ✅ Campaign is now inactive")
+    else:
+        print(f"\n✅ Day {current_day} complete! Processed {jobs_processed} jobs.")
+        print(f"   Next run: Day {current_day + 1}")
 
 
 def show_status():
@@ -503,6 +542,63 @@ def show_status():
     print(f"\n⏰ Last Updated: {state.get('last_updated', 'N/A')}")
 
 
+def list_all_campaigns():
+    """List all campaigns from all users."""
+    print("\n" + "="*60)
+    print("📋 ALL CAMPAIGNS")
+    print("="*60 + "\n")
+    
+    # Get all agent states
+    res = supabase.table("agent_states").select("*, profiles(full_name)").execute()
+    
+    if not res.data:
+        print("❌ No campaigns found.")
+        return
+    
+    active_count = 0
+    completed_count = 0
+    
+    for state in res.data:
+        # Find config in history
+        config = None
+        for item in state.get("history", []):
+            if isinstance(item, dict) and item.get("type") == "campaign_config":
+                config = item
+                break
+        
+        if not config:
+            continue
+        
+        # Get user name
+        user_name = state.get("profiles", {}).get("full_name", "Unknown") if state.get("profiles") else "Unknown"
+        user_id = state.get("user_id")
+        
+        # Get job count
+        apps = supabase.table("job_applications").select("id", count="exact").eq("user_id", user_id).execute()
+        job_count = apps.count if hasattr(apps, 'count') else len(apps.data) if apps.data else 0
+        
+        is_active = config.get("is_active", False)
+        status_icon = "🟢" if is_active else "🔴"
+        
+        if is_active:
+            active_count += 1
+        else:
+            completed_count += 1
+        
+        print(f"{status_icon} {user_name}")
+        print(f"   🎯 Role: {config.get('target_role')}")
+        print(f"   📍 Location: {config.get('location')}")
+        print(f"   📅 Progress: Day {config.get('current_day')}/{config.get('total_days')}")
+        print(f"   📊 Jobs Scouted: {job_count}")
+        print(f"   📆 Started: {config.get('start_date')}")
+        if config.get('completed_date'):
+            print(f"   ✅ Completed: {config.get('completed_date')}")
+        print()
+    
+    print("-"*60)
+    print(f"📊 Summary: {active_count} active, {completed_count} completed")
+
+
 # ============== MAIN ==============
 
 def main():
@@ -518,6 +614,8 @@ def main():
         run_campaign_iteration()
     elif command == "--status":
         show_status()
+    elif command == "--list":
+        list_all_campaigns()
     else:
         print(f"Unknown command: {command}")
         print(__doc__)

@@ -1,12 +1,12 @@
 # Marathon Agent: Cron Job Runner
-# Runs every 6 hours to process all active user campaigns
+# Runs every day at 2 AM UTC to process all active user campaigns
 
 name: Marathon Agent Runner
 
 on:
   schedule:
-    # Run every 6 hours
-    - cron: '0 */6 * * *'
+    # Run every day at 2 AM UTC
+    - cron: '0 2 * * *'
   
   # Allow manual triggering from GitHub UI
   workflow_dispatch:
