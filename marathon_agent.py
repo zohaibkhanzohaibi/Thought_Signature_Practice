@@ -18,6 +18,7 @@ Usage:
 import os
 import sys
 import base64
+import time
 from datetime import date, datetime, timezone
 from google import genai
 from google.genai import types
@@ -25,6 +26,73 @@ from supabase import create_client
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# ============== RATE LIMIT HANDLING ==============
+
+class DailyLimitReached(Exception):
+    """Exception raised when daily API quota is exhausted."""
+    def __init__(self, last_signature=None, message="Daily API limit reached"):
+        self.last_signature = last_signature
+        self.message = message
+        super().__init__(self.message)
+
+
+def is_rate_limit_error(error):
+    """
+    Detect if error is a rate limit.
+    Returns: (is_rate_limit, is_daily_limit)
+    """
+    error_str = str(error).lower()
+    
+    # Check for daily limit
+    if "daily limit" in error_str or "quota exceeded" in error_str:
+        return True, True
+    
+    # Check for per-minute rate limit (429)
+    if "429" in error_str or "resource_exhausted" in error_str:
+        return True, False
+    
+    # Check for temporary overload (503)
+    if "503" in error_str or "unavailable" in error_str or "overloaded" in error_str:
+        return True, False
+    
+    return False, False
+
+
+def call_with_retry(api_func, max_retries=3, wait_seconds=60):
+    """
+    Call API function with retry logic for rate limits.
+    - Per-minute limit: wait and retry
+    - Daily limit: raise DailyLimitReached
+    - 503 overload: wait and retry
+    """
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return api_func()
+        except Exception as e:
+            last_error = e
+            is_rate_limit, is_daily = is_rate_limit_error(e)
+            
+            if is_daily:
+                print(f"\n🚫 Daily API limit reached!")
+                raise DailyLimitReached()
+            
+            if is_rate_limit and attempt < max_retries:
+                print(f"\n⏳ Rate limit hit. Waiting {wait_seconds}s... (attempt {attempt+1}/{max_retries})")
+                time.sleep(wait_seconds)
+                continue
+            
+            # If rate limit persists after all retries, show helpful message
+            if is_rate_limit:
+                print(f"\n🚫 Rate limit persisted after {max_retries} retries.")
+                print(f"   This is likely a daily quota limit.")
+                print(f"   Check your usage at: https://ai.dev/rate-limit")
+                print(f"   Daily quota typically resets at midnight UTC.\n")
+                raise DailyLimitReached()
+            
+            raise
 
 # Setup Clients
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -34,8 +102,8 @@ MODEL_ID = "gemini-3-flash-preview"
 
 # Fixed Test User Profile
 TEST_USER = {
-    "full_name": "Test Job Seeker",
-    "email": "testseeker@example.com",
+    "full_name": "Zohaib",
+    "email": "zohaibseeker@example.com",
     "skills": ["Python", "SQL", "Data Analysis", "Excel", "Power BI"],
     "experience_years": 2,
     "location": "Karachi",
@@ -175,14 +243,14 @@ For posted_date, use realistic relative times like "Today", "Yesterday", "2 days
 Focus on jobs in {location} or Remote positions. Match the user's skill level and experience.
 """
     
-    response = client.models.generate_content(
+    response = call_with_retry(lambda: client.models.generate_content(
         model=MODEL_ID,
         contents=prompt,
         config=types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())],
             thinking_config=types.ThinkingConfig(include_thoughts=True)
         )
-    )
+    ))
     
     # Extract signature
     signature = None
@@ -234,13 +302,13 @@ APPLICANT:
 Write a concise 3-paragraph cover letter. Be professional but personable.
 """
     
-    response = client.models.generate_content(
+    response = call_with_retry(lambda: client.models.generate_content(
         model=MODEL_ID,
         contents=prompt,
         config=types.GenerateContentConfig(
             thinking_config=types.ThinkingConfig(include_thoughts=True)
         )
-    )
+    ))
     
     signature = None
     if response.candidates and response.candidates[0].content.parts:
@@ -287,7 +355,7 @@ def continue_with_signature(history: list, new_prompt: str):
         )
     )
     
-    response = chat.send_message(new_prompt)
+    response = call_with_retry(lambda: chat.send_message(new_prompt))
     
     # Extract new signature
     signature = None
@@ -349,7 +417,12 @@ def create_campaign_form():
     
     # Initial AI search
     print(f"\n🔎 Searching for '{job_query}' jobs in {location}...")
-    jobs, signature = search_jobs_with_ai(job_query, profile, location)
+    try:
+        jobs, signature = search_jobs_with_ai(job_query, profile, location)
+    except DailyLimitReached:
+        print("❌ Campaign creation aborted due to API limits.")
+        print("   Please try again when your quota resets.")
+        return None
     
     # Build initial history
     initial_prompt = f"I'm looking for {job_query} jobs in {location}. Find me {jobs_per_day} good matches per day for {duration_days} days."
@@ -494,6 +567,16 @@ def run_campaign_iteration(user_id: str = None):
         try:
             cover_letter, _ = generate_cover_letter(job, profile)
             print(f"    ✓ Cover letter generated")
+        except DailyLimitReached:
+            # Save state and exit gracefully on daily limit
+            print(f"\n💾 Saving state before exit...")
+            state["thought_signature"] = encode_signature(new_signature) if new_signature else state.get("thought_signature")
+            state["internal_summary"] = f"Paused: Daily limit reached on day {current_day}, {jobs_processed} jobs processed"
+            state["history"] = history
+            save_agent_state(user_id, state)
+            print(f"   ✅ State saved. Resume when quota resets.")
+            print(f"   ⏰ Daily quota typically resets at midnight UTC.")
+            return
         except Exception as e:
             cover_letter = None
             print(f"    ✗ Cover letter failed: {e}")
