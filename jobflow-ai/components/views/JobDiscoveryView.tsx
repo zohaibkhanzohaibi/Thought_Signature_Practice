@@ -1,138 +1,269 @@
-import React, { useState } from 'react';
-import { Search, Filter, ArrowUpRight, ExternalLink, MoreVertical } from 'lucide-react';
-import { Job } from '../../types';
-import { MOCK_JOBS } from '../../constants';
-import { AIInfo } from '../common/AIInfo';
+import React, { useState, useEffect } from 'react';
+import { Plus, Sparkles, Briefcase, MapPin, Globe, Mail, ArrowRight, Loader2 } from 'lucide-react';
+// 👇 Import your existing auth service
+import { authService } from '../../services/auth'; 
 
-export const JobDiscoveryView = ({ onApply }: { onApply: (job: Job) => void }) => {
-    const [selectedJob, setSelectedJob] = useState<Job | null>(MOCK_JOBS[0]);
+interface PublicJob {
+    id: number;
+    title: string;
+    company: string;
+    location: string;
+    description: string;
+    contact_email?: string;
+    source_url?: string;
+}
+
+export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) => {
+    // State
+    const [mode, setMode] = useState<'feed' | 'create'>('feed');
+    const [rawText, setRawText] = useState('');
+    const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [parsedJob, setParsedJob] = useState<Partial<PublicJob> | null>(null);
+    const [publicJobs, setPublicJobs] = useState<PublicJob[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    
+    // Auth State
+    const [token, setToken] = useState<string | null>(null);
+
+    // 1. Initialize: Get Token from your authService
+    useEffect(() => {
+        // use authService.getToken() which looks for "token"
+        const storedToken = authService.getToken(); 
+        
+        if (storedToken) {
+            setToken(storedToken);
+            console.log("✅ User Logged In");
+        } else {
+            console.log("❌ No Token Found (User logged out)");
+        }
+
+        fetchPublicJobs();
+    }, []);
+
+    // Helper: Build headers using the token
+    const getAuthHeaders = () => {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+        };
+    };
+
+    const fetchPublicJobs = async () => {
+        setIsLoading(true);
+        try {
+            const res = await fetch('http://localhost:8000/api/jobs/public/feed');
+            const data = await res.json();
+            setPublicJobs(data);
+        } catch (e) {
+            console.error("Failed to fetch jobs", e);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // 2. Handle Text Analysis
+    const handleAnalyze = async () => {
+        if (!rawText) return;
+        
+        if (!token) {
+            alert("Please log in to use AI analysis.");
+            return;
+        }
+
+        setIsAnalyzing(true);
+        try {
+            const res = await fetch('http://localhost:8000/api/jobs/parse-raw', {
+                method: 'POST',
+                headers: getAuthHeaders(), // Sends "Bearer <token>"
+                body: JSON.stringify({ raw_text: rawText }) 
+            });
+            
+            if (!res.ok) throw new Error("Analysis failed");
+            
+            const data = await res.json();
+            setParsedJob(data);
+        } catch (error) {
+            console.error(error);
+            alert("Failed to analyze job text.");
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
+    // 3. Handle Saving to Database
+    const handleShareJob = async () => {
+        if (!parsedJob || !token) return;
+
+        try {
+            const payload = {
+                title: parsedJob.title,
+                company: parsedJob.company,
+                location: parsedJob.location || "Remote",
+                description: parsedJob.description || parsedJob.summary || "", 
+                contact_email: parsedJob.contact_email,
+                source_url: parsedJob.source_url
+            };
+
+            const response = await fetch('http://localhost:8000/api/jobs/public', {
+                method: 'POST',
+                headers: getAuthHeaders(), 
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                console.error("Save failed:", err);
+                alert("Failed to save job. See console.");
+                return;
+            }
+
+            // Success
+            setMode('feed');
+            setRawText('');
+            setParsedJob(null);
+            fetchPublicJobs();
+        } catch (error) {
+            console.error("Failed to save", error);
+        }
+    };
+
+    // 4. Handle "Draft Application"
+    const handleImportToProfile = async (jobId: number) => {
+        if (!token) {
+            alert("Please log in to apply.");
+            return;
+        }
+
+        try {
+            const res = await fetch(`http://localhost:8000/api/jobs/public/${jobId}/save-to-profile`, {
+                method: 'POST',
+                headers: getAuthHeaders() 
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                onApply(data); 
+            } else {
+                alert("Failed to create application draft.");
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
 
     return (
-        <div className="flex h-[calc(100vh-140px)] gap-6 animate-in slide-in-from-bottom-4 duration-500">
-            {/* Filters (Simplified for this version) */}
-            <div className="w-64 flex-shrink-0 bg-white border border-slate-200 rounded-[32px] p-8 hidden lg:block overflow-y-auto shadow-sm">
-                <h4 className="font-bold text-slate-800 mb-8">Refine Search</h4>
-                <div className="space-y-8">
-                    <div>
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 block">Job Type</label>
-                        <div className="space-y-3">
-                            {['Full-time', 'Contract', 'Remote'].map(t => (
-                                <label key={t} className="flex items-center gap-3 text-sm font-medium text-slate-600 cursor-pointer hover:text-blue-600 transition-colors">
-                                    <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 transition-all" />
-                                    {t}
-                                </label>
-                            ))}
-                        </div>
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 block">Match Level</label>
-                        <div className="flex items-center justify-between mb-2">
-                            <span className="text-[10px] font-bold text-slate-400">75%</span>
-                            <span className="text-[10px] font-bold text-blue-600">100%</span>
-                        </div>
-                        <input type="range" className="w-full h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600" />
-                    </div>
+        <div className="h-full flex flex-col gap-6 animate-in fade-in duration-500">
+            {/* Header */}
+            <div className="flex justify-between items-center bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
+                <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Community Job Board</h2>
+                    <p className="text-slate-500">Discover jobs found by the community or add your own.</p>
                 </div>
+                <button 
+                    onClick={() => setMode(mode === 'feed' ? 'create' : 'feed')}
+                    className={`px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all ${
+                        mode === 'feed' 
+                        ? 'bg-slate-900 text-white hover:bg-slate-800' 
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                >
+                    {mode === 'feed' ? <><Plus size={20}/> Add Manual Job</> : 'Back to Feed'}
+                </button>
             </div>
 
-            <div className="flex-1 flex flex-col gap-6 overflow-hidden">
-                <div className="bg-white border border-slate-200 rounded-[24px] p-4 flex items-center gap-4 shadow-sm">
-                    <div className="flex-1 relative">
-                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                        <input type="text" placeholder="Search by title, stack, or company..." className="w-full pl-12 pr-4 py-3 bg-slate-50 border-transparent rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all" />
-                    </div>
-                    <button className="flex items-center gap-2 px-5 py-3 bg-slate-50 hover:bg-slate-100 rounded-2xl text-sm font-bold text-slate-600 transition-colors">
-                        <Filter size={18} /> Filters
-                    </button>
-                </div>
-
-                <div className="flex-1 flex gap-6 overflow-hidden">
-                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                        {MOCK_JOBS.map(job => (
-                            <div
-                                key={job.id}
-                                onClick={() => setSelectedJob(job)}
-                                className={`p-6 rounded-[32px] border transition-all cursor-pointer relative overflow-hidden ${selectedJob?.id === job.id
-                                        ? 'border-blue-600 ring-4 ring-blue-50 bg-blue-50/20'
-                                        : 'bg-white border-slate-100 hover:border-slate-300 hover:shadow-lg'
-                                    }`}
-                            >
-                                {selectedJob?.id === job.id && <div className="absolute top-0 right-0 w-24 h-24 bg-blue-600/5 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>}
-
-                                <div className="flex justify-between items-start mb-4 relative z-10">
-                                    <div className="flex gap-4">
-                                        <img src={job.logo} className="w-14 h-14 rounded-2xl shadow-sm border border-slate-100" />
-                                        <div>
-                                            <h4 className="font-bold text-slate-800 text-xl leading-tight mb-1">{job.position}</h4>
-                                            <p className="text-sm font-semibold text-slate-500">{job.company} • {job.location}</p>
-                                        </div>
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="inline-flex items-center px-3 py-1.5 rounded-xl bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-100 shadow-sm">
-                                            {job.matchScore}% MATCH <AIInfo text="Our AI verified your skills match this role's tech stack and experience requirements." />
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex flex-wrap gap-2 mb-6 relative z-10">
-                                    {job.techStack.map(t => (
-                                        <span key={t} className="px-3 py-1.5 bg-slate-50 text-slate-600 rounded-xl text-[10px] font-bold border border-slate-100">{t}</span>
-                                    ))}
-                                </div>
-                                <div className="flex justify-between items-center pt-5 border-t border-slate-100 relative z-10">
-                                    <p className="text-lg font-bold text-slate-800">{job.salary}</p>
-                                    <div className="flex items-center gap-3">
-                                        <button className="px-4 py-2.5 text-xs font-bold text-slate-400 hover:bg-slate-50 rounded-xl transition-colors">Save Job</button>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); onApply(job); }}
-                                            className="px-6 py-2.5 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-xl shadow-blue-100 hover:bg-blue-700 hover:shadow-blue-200 transition-all"
-                                        >
-                                            Auto-Apply
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
+            {/* CREATE MODE */}
+            {mode === 'create' && (
+                <div className="flex-1 flex gap-6">
+                    <div className="flex-1 bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm flex flex-col">
+                        <label className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">
+                            Paste Job Post (LinkedIn, Email, etc.)
+                        </label>
+                        <textarea 
+                            value={rawText}
+                            onChange={(e) => setRawText(e.target.value)}
+                            placeholder="Paste the entire post here..."
+                            className="flex-1 w-full bg-slate-50 border-transparent rounded-2xl p-6 text-slate-600 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none resize-none transition-all mb-4"
+                        />
+                        <button 
+                            onClick={handleAnalyze}
+                            disabled={isAnalyzing || !rawText}
+                            className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl flex justify-center items-center gap-2 transition-all disabled:opacity-50"
+                        >
+                            {isAnalyzing ? <Loader2 className="animate-spin" /> : <Sparkles size={20} />}
+                            Analyze with AI
+                        </button>
+                        {!token && <p className="text-xs text-red-500 text-center mt-2 font-bold">You must be logged in to analyze.</p>}
                     </div>
 
-                    {selectedJob && (
-                        <div className="w-[500px] bg-white border border-slate-200 rounded-[32px] overflow-hidden flex flex-col hidden xl:flex shadow-xl">
-                            <div className="p-8 border-b border-slate-100 bg-slate-50/50">
-                                <div className="flex items-center justify-between mb-8">
-                                    <img src={selectedJob.logo} className="w-20 h-20 rounded-[28px] border-4 border-white shadow-xl" />
-                                    <div className="flex gap-3">
-                                        <button className="p-3 bg-white text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all shadow-sm"><ExternalLink size={20} /></button>
-                                        <button className="p-3 bg-white text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all shadow-sm"><MoreVertical size={20} /></button>
+                    {/* Preview Panel */}
+                    {parsedJob && (
+                        <div className="w-1/3 bg-white border border-slate-200 rounded-[32px] p-8 shadow-xl animate-in slide-in-from-right-4">
+                            <h3 className="font-bold text-lg text-slate-800 mb-6">Preview Extraction</h3>
+                            <div className="space-y-4 mb-8">
+                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                    <div className="text-xs font-bold text-slate-400 uppercase">Role</div>
+                                    <div className="font-bold text-slate-700">{parsedJob.title || "Unknown"}</div>
+                                </div>
+                                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                    <div className="text-xs font-bold text-slate-400 uppercase">Company</div>
+                                    <div className="font-bold text-slate-700">{parsedJob.company || "Unknown"}</div>
+                                </div>
+                                {(parsedJob.contact_email || parsedJob.source_url) && (
+                                    <div className="flex gap-2 flex-wrap">
+                                        {parsedJob.contact_email && (
+                                            <span className="px-3 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-bold flex items-center gap-1"><Mail size={12}/> Email Found</span>
+                                        )}
+                                        {parsedJob.source_url && (
+                                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1"><Globe size={12}/> URL Found</span>
+                                        )}
                                     </div>
-                                </div>
-                                <h3 className="text-2xl font-bold text-slate-800 leading-tight mb-2 tracking-tight">{selectedJob.position}</h3>
-                                <p className="text-slate-500 font-bold text-sm uppercase tracking-widest">{selectedJob.company} • {selectedJob.location}</p>
+                                )}
                             </div>
-                            <div className="flex-1 overflow-y-auto p-8 space-y-10 custom-scrollbar">
-                                <div>
-                                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">The Opportunity</h4>
-                                    <p className="text-base text-slate-600 leading-relaxed font-medium">{selectedJob.description}</p>
-                                </div>
-                                <div className="p-8 bg-blue-600 rounded-[32px] text-white shadow-2xl shadow-blue-200 relative overflow-hidden group">
-                                    <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 group-hover:scale-150 transition-transform duration-700"></div>
-                                    <div className="flex items-center gap-3 mb-4">
-                                        <ArrowUpRight className="text-blue-200" size={24} />
-                                        <h5 className="font-bold text-xl">AI Application Boost</h5>
-                                    </div>
-                                    <p className="text-sm text-blue-100 leading-relaxed mb-8 font-medium">
-                                        We've matched your <strong>React</strong> and <strong>Node.js</strong> projects with their platform goals. Applying now increases your response chance by 40%.
-                                    </p>
-                                    <button
-                                        onClick={() => onApply(selectedJob)}
-                                        className="w-full py-4 bg-white text-blue-600 font-bold rounded-2xl shadow-xl hover:bg-blue-50 transition-all active:scale-95"
-                                    >
-                                        Generate Application Now
-                                    </button>
-                                </div>
-                            </div>
+                            <button onClick={handleShareJob} className="w-full py-4 bg-slate-900 text-white font-bold rounded-2xl hover:scale-[1.02] transition-transform shadow-lg">
+                                Save to Community Board
+                            </button>
                         </div>
                     )}
                 </div>
-            </div>
+            )}
+
+            {/* FEED MODE */}
+            {mode === 'feed' && (
+                <div className="flex-1 bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm overflow-hidden flex flex-col">
+                    {isLoading ? (
+                        <div className="flex-1 flex justify-center items-center">
+                            <Loader2 className="animate-spin text-slate-300" size={40} />
+                        </div>
+                    ) : (
+                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                            {publicJobs.map((job) => (
+                                <div key={job.id} className="p-6 border border-slate-100 rounded-[24px] hover:border-slate-300 hover:shadow-md transition-all group bg-slate-50/50">
+                                    <div className="flex justify-between items-start">
+                                        <div className="flex-1 mr-4">
+                                            <h3 className="text-xl font-bold text-slate-800">{job.title}</h3>
+                                            <div className="flex items-center gap-4 mt-2 text-slate-500 font-medium text-sm flex-wrap">
+                                                <span className="flex items-center gap-1"><Briefcase size={14}/> {job.company}</span>
+                                                <span className="flex items-center gap-1"><MapPin size={14}/> {job.location || 'Remote'}</span>
+                                                {job.contact_email && <span className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md"><Mail size={14}/> {job.contact_email}</span>}
+                                            </div>
+                                            <p className="mt-4 text-slate-600 line-clamp-2 text-sm">{job.description}</p>
+                                        </div>
+                                        <button onClick={() => handleImportToProfile(job.id)} className="px-5 py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all shadow-sm flex items-center gap-2 group-hover:translate-x-1 whitespace-nowrap">
+                                            Draft Application <ArrowRight size={16} />
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                            {publicJobs.length === 0 && (
+                                <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                                    <Briefcase size={48} className="mb-4 opacity-20" />
+                                    <p>No jobs found. Be the first to add one!</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };

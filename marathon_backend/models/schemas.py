@@ -328,3 +328,20 @@ class HealthResponse(BaseModel):
     database: str = "connected"
     gemini_api: str = "available"
     version: str = "1.0.0"
+
+# Update these classes to remove user_id fields
+
+class RawJobPost(BaseModel):
+    raw_text: str
+
+class PublicJobCreate(BaseModel):
+    title: str
+    company: str
+    location: Optional[str] = "Remote"
+    description: str
+    contact_email: Optional[str] = None
+    source_url: Optional[str] = None
+
+class PublicJobResponse(PublicJobCreate):
+    id: int
+    created_at: datetime
