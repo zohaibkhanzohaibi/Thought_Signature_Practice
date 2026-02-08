@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight, Hash } from 'lucide-react';
+import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight } from 'lucide-react';
 import { authService } from '../../services/auth';
 import { GoogleLogin } from '@react-oauth/google';
 
@@ -12,7 +12,7 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) =>
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [name, setName] = useState('');
-    const [userId, setUserId] = useState('');
+
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -121,19 +121,7 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) =>
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">User ID (optional)</label>
-                            <div className="relative">
-                                <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                                <input
-                                    type="text"
-                                    value={userId}
-                                    onChange={(e) => setUserId(e.target.value)}
-                                    placeholder="my_unique_id (auto-generated from email if empty)"
-                                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
-                                />
-                            </div>
-                        </div>
+
 
                         <div className="space-y-2">
                             <div className="flex justify-between items-center ml-1">
