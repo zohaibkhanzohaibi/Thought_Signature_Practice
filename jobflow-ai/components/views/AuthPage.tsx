@@ -1,13 +1,22 @@
 import React, { useState } from 'react';
+<<<<<<< HEAD
 import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight } from 'lucide-react';
 import { authService } from '../../services/auth';
 import { GoogleLogin } from '@react-oauth/google';
+=======
+import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, Hash } from 'lucide-react';
+>>>>>>> origin/feature/profile-github-integration
 
-export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
+export const AuthPage = ({ onLogin }: { onLogin: (userId: string) => void }) => {
     const [isLogin, setIsLogin] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+<<<<<<< HEAD
     const [error, setError] = useState<string | null>(null);
+=======
+    const [email, setEmail] = useState('');
+    const [userId, setUserId] = useState('');
+>>>>>>> origin/feature/profile-github-integration
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -17,6 +26,7 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
         e.preventDefault();
         setError(null);
         setLoading(true);
+<<<<<<< HEAD
 
         try {
             if (isLogin) {
@@ -34,6 +44,16 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
         } finally {
             setLoading(false);
         }
+=======
+        // Use email as userId if userId not provided, or generate one
+        const finalUserId = userId.trim() || email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_') || `user_${Date.now()}`;
+        
+        // Simulate API call
+        setTimeout(() => {
+            setLoading(false);
+            onLogin(finalUserId);
+        }, 1200);
+>>>>>>> origin/feature/profile-github-integration
     };
 
     return (
@@ -116,6 +136,20 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                     placeholder="ahmed@example.com"
                                     className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                     required
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">User ID (optional)</label>
+                            <div className="relative">
+                                <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                <input
+                                    type="text"
+                                    value={userId}
+                                    onChange={(e) => setUserId(e.target.value)}
+                                    placeholder="my_unique_id (auto-generated from email if empty)"
+                                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                 />
                             </div>
                         </div>

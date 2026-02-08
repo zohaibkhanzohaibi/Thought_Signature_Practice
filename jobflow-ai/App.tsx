@@ -21,17 +21,26 @@ import { authService } from './services/auth';
 
 const App = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [userId, setUserId] = useState<string>('');
 
   useEffect(() => {
     if (authService.isAuthenticated()) {
       setIsAuthenticated(true);
+      // Ideally we would fetch the user profile here to set userId
+      // For now we rely on the ProfileView fetching its own data
     }
   }, []);
+
   const [currentView, setView] = useState<ViewType>('dashboard');
   const [darkMode, setDarkMode] = useState(false); // Helper state for now, logic inside Header/Components needs to respect it if implemented fully
   const [apps, setApps] = useState<Application[]>(MOCK_APPLICATIONS);
   const [isApplying, setIsApplying] = useState<Job | null>(null);
   const [notifications, setNotifications] = useState<string[]>([]);
+
+  const handleLogin = (id?: string) => {
+    if (id) setUserId(id);
+    setIsAuthenticated(true);
+  };
 
   const handleApplyComplete = (newApp: Application) => {
     setApps(prev => [newApp, ...prev]);
@@ -45,7 +54,7 @@ const App = () => {
   };
 
   if (!isAuthenticated) {
-    return <AuthPage onLogin={() => setIsAuthenticated(true)} />;
+    return <AuthPage onLogin={handleLogin} />;
   }
 
   return (
@@ -66,7 +75,7 @@ const App = () => {
           {currentView === 'dashboard' && <DashboardView apps={apps} onAdd={() => setView('discovery')} />}
           {currentView === 'discovery' && <JobDiscoveryView onApply={(j) => setIsApplying(j)} />}
           {currentView === 'manager' && <ManagerView apps={apps} />}
-          {currentView === 'profile' && <ProfileView />}
+          {currentView === 'profile' && <ProfileView userId={userId} />}
           {currentView === 'inbox' && <InboxView />}
 
           {/* Placeholders for unimplemented views */}
