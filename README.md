@@ -1,143 +1,206 @@
-# Marathon Agent - AI Job Search with Thought Signature Persistence
+# Marathon Agent - AI Job Search Backend
 
-A sophisticated multi-session AI job search agent using Google's Gemini model with thought signature persistence and Supabase for state management.
+A FastAPI backend for automated job searching, resume tailoring, and Gmail integration using Google Gemini AI with thought signature persistence.
 
 ## ✨ Features
 
-- **Real Job Search** - Uses Google Search grounding to find actual job listings
+- **AI Job Search** - Uses Gemini with Google Search grounding to find real job listings
+- **Resume Tailoring** - Multi-agent pipeline (Recruiter → Writer → Critic) for ATS-optimized resumes
+- **LaTeX PDF Generation** - Professional resume PDFs with Jinja2 templating
+- **Gmail Integration** - Per-user OAuth2, draft creation, and email reply agent
 - **Thought Signature Persistence** - Maintains AI reasoning continuity across sessions
-- **Rate Limit Handling** - Automatic retry logic with graceful state saving
-- **Smart Job Flow** - Applies to pending jobs first, then searches for new ones
-- **Campaign Management** - Multi-day job search campaigns with daily limits
-- **GitHub Actions** - Automated daily execution at 2 AM UTC
+- **GitHub Portfolio Sync** - Fetches repos and tech stack for resume enhancement
 
 ## 📁 Project Structure
 
 ```
 thought_signature/
-├── marathon_agent.py       # Unified agent with all commands
-├── requirements.txt        # Python dependencies
-├── .env                    # Environment variables (DO NOT COMMIT)
-├── .gitignore              # Git ignore rules
-└── .github/
-    └── workflows/
-        └── marathon_runner.yml  # Daily cron job
+├── marathon_backend/           # FastAPI application
+│   ├── main.py                 # App entry point
+│   ├── models/
+│   │   ├── database.py         # Supabase client & queries
+│   │   └── schemas.py          # Pydantic models
+│   ├── routers/
+│   │   ├── profile.py          # User profile endpoints
+│   │   ├── campaigns.py        # Job search campaigns
+│   │   ├── jobs.py             # Job applications & tailoring
+│   │   └── gmail.py            # Gmail OAuth & drafts
+│   ├── services/
+│   │   ├── job_search.py       # AI job search with Google grounding
+│   │   ├── resume_tailor.py    # Multi-agent resume tailoring
+│   │   ├── resume_parser.py    # PDF resume parsing
+│   │   ├── pdf_renderer.py     # LaTeX resume generation
+│   │   ├── github_service.py   # GitHub portfolio fetching
+│   │   ├── gmail_service.py    # Gmail API operations
+│   │   └── email_reply_agent.py # Automated email monitoring
+│   ├── templates/
+│   │   └── resume.tex          # ATS-optimized LaTeX template
+│   └── cron_runner.py          # GitHub Actions cron script
+├── frontend/                   # React TypeScript frontend
+│   ├── src/
+│   │   ├── App.tsx             # Main app component
+│   │   ├── api.ts              # API client
+│   │   └── components/         # UI components
+│   ├── package.json
+│   └── vite.config.ts
+├── migrations/
+│   └── 001_enhanced_schema.sql # Database schema
+├── .github/
+│   └── workflows/
+│       └── marathon_runner.yml # Daily cron workflow
+├── resumes/                    # Generated PDF storage
+├── requirements.txt            # Python dependencies
+└── .env                        # Environment variables
 ```
 
 ## 🚀 Quick Start
 
-### 1. Setup Environment
+### 1. Setup Backend
 
 ```powershell
 # Create and activate virtual environment
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Configure .env
+### 2. Setup Frontend
+
+```powershell
+cd frontend
+npm install
+```
+
+### 3. Configure .env
 
 ```env
+# Required
 SUPABASE_URL="your_supabase_url"
 SUPABASE_KEY="your_supabase_service_key"
 GEMINI_API_KEY="your_gemini_api_key"
+
+# Gmail OAuth (optional)
+GOOGLE_CLIENT_ID="your_client_id"
+GOOGLE_CLIENT_SECRET="your_client_secret"
+GOOGLE_REDIRECT_URI="http://localhost:8000/api/gmail/callback"
+
+# GitHub (optional, increases rate limit)
+GITHUB_TOKEN="your_github_pat"
 ```
 
-### 3. Run Commands
+### 4. Run Database Migration
+
+Apply the schema to your Supabase project:
+```sql
+-- Run migrations/001_enhanced_schema.sql in Supabase SQL Editor
+```
+
+### 5. Start the Servers
 
 ```powershell
-# Create a new job search campaign (interactive)
-python marathon_agent.py --create
+# Terminal 1: Start backend (port 8000)
+uvicorn marathon_backend.main:app --reload --port 8000
 
-# Run one iteration for your campaign
-python marathon_agent.py --run
-
-# Check campaign status
-python marathon_agent.py --status
-
-# List all campaigns
-python marathon_agent.py --list
-
-# Run all active campaigns (for GitHub Actions/cron)
-python marathon_agent.py --cron
+# Terminal 2: Start frontend (port 3000)
+cd frontend
+npm run dev
 ```
 
-## 📊 How It Works
+### 6. Access the App
 
-### Job Flow
-1. **Create Campaign** - Scout initial jobs and save them as "scouted"
-2. **Daily Iteration** - First apply to pending scouted jobs, then search for new ones
-3. **Deduplication** - Excludes previously applied jobs from new searches
-4. **Campaign End** - Marks campaign inactive on final day
+- **Frontend**: http://localhost:3000
+- **API Docs**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
 
-### Thought Signatures
-When Gemini uses thinking mode, it generates a `thought_signature` - a cryptographic fingerprint of its reasoning. By persisting this:
-- AI maintains context across sessions
-- Reasoning chain continues seamlessly
-- No repeated steps or lost context
+## 📡 API Endpoints
 
-### Rate Limit Handling
-- Automatic retry (3 attempts, 60s wait)
-- Detects daily quota vs per-minute limits
-- Saves state before exit on quota exhaustion
-- Resume seamlessly when quota resets
+### Profile
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/profile/{user_id}` | Get user profile |
+| POST | `/api/profile/{user_id}/resume/upload` | Upload & parse resume PDF |
+| POST | `/api/profile/{user_id}/github/sync` | Sync GitHub portfolio |
 
-## 🔧 GitHub Actions Setup
+### Campaigns
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/campaigns/` | Create job search campaign |
+| GET | `/api/campaigns/user/{user_id}` | List user campaigns |
+| POST | `/api/campaigns/{id}/run` | Execute campaign search |
 
-### 1. Add Repository Secrets
-Go to **Settings** → **Secrets and variables** → **Actions**:
+### Jobs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/jobs/user/{user_id}` | List job applications |
+| POST | `/api/jobs/{id}/tailor` | Tailor resume for job |
+| POST | `/api/jobs/{id}/generate-pdf` | Generate resume PDF |
+| POST | `/api/jobs/{id}/create-draft` | Create Gmail draft |
 
-| Secret | Value |
-|--------|-------|
-| `GEMINI_API_KEY` | Your Gemini API key |
-| `SUPABASE_URL` | Your Supabase URL |
-| `SUPABASE_KEY` | Your Supabase service key |
+### Gmail
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/gmail/auth` | Start OAuth flow |
+| GET | `/api/gmail/callback` | OAuth callback |
+| POST | `/api/gmail/{user_id}/check-emails` | Check for new emails |
 
-### 2. Cron Schedule
-Runs daily at 2 AM UTC. To change, edit `.github/workflows/marathon_runner.yml`:
+## 🔧 LaTeX Setup (Optional)
 
-```yaml
-schedule:
-  - cron: '0 2 * * *'  # Daily at 2 AM UTC
+For PDF generation, install a LaTeX distribution:
+
+**Windows:**
+```powershell
+# Using Chocolatey
+choco install miktex
+
+# Or download from https://miktex.org/download
 ```
+
+**Alternative:** The system falls back to Tectonic if pdflatex is unavailable.
 
 ## 🗄️ Database Schema
 
-```sql
--- Profiles table
-CREATE TABLE profiles (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    full_name TEXT,
-    contact_info JSONB,
-    summary TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+Key tables in Supabase:
+- `user_profiles` - User info, parsed resume, portfolio
+- `agent_states` - Campaign configs with thought signatures
+- `job_applications` - Jobs with tailored resumes & status
+- `campaign_runs` - Execution logs
+- `user_gmail_tokens` - Per-user OAuth tokens (encrypted)
+- `email_threads` - Tracked email conversations
 
--- Agent states (thought signatures + campaign config)
-CREATE TABLE agent_states (
-    user_id UUID PRIMARY KEY REFERENCES profiles(id),
-    thought_signature TEXT,
-    history JSONB DEFAULT '[]',
-    internal_summary TEXT,
-    thinking_level TEXT DEFAULT 'low',
-    last_updated TIMESTAMPTZ DEFAULT NOW()
-);
+## 🔐 Security Notes
 
--- Job applications
-CREATE TABLE job_applications (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES profiles(id),
-    job_title TEXT,
-    company_name TEXT,
-    source_url TEXT,
-    status TEXT DEFAULT 'scouted',  -- scouted, applied, interview, offer
-    replies_log JSONB DEFAULT '[]',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+- Gmail tokens stored encrypted in database
+- Per-user OAuth isolation
+- Service key should have RLS policies enabled
+- Never commit `.env` file
 
-## 📝 License
+## ⏰ GitHub Actions (Automated Cron)
 
-MIT License
+The workflow runs daily at 2 AM UTC to:
+1. Start the FastAPI server temporarily
+2. Run all active campaigns (job search)
+3. Check emails for each user
+4. Shut down
+
+### Required Secrets
+
+Go to **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_KEY` | Supabase service role key |
+| `GH_PAT` | GitHub personal access token (optional) |
+| `GOOGLE_CLIENT_ID` | Gmail OAuth client ID (optional) |
+| `GOOGLE_CLIENT_SECRET` | Gmail OAuth secret (optional) |
+
+### Manual Trigger
+
+Run manually from **Actions → Marathon Agent Runner → Run workflow**.
+
+## 📄 License
+
+MIT
