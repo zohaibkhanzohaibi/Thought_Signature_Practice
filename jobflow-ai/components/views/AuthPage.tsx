@@ -1,32 +1,23 @@
 import React, { useState } from 'react';
-<<<<<<< HEAD
-import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight } from 'lucide-react';
+import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight, Hash } from 'lucide-react';
 import { authService } from '../../services/auth';
 import { GoogleLogin } from '@react-oauth/google';
-=======
-import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, Hash } from 'lucide-react';
->>>>>>> origin/feature/profile-github-integration
 
-export const AuthPage = ({ onLogin }: { onLogin: (userId: string) => void }) => {
+export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) => {
     const [isLogin, setIsLogin] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
-<<<<<<< HEAD
     const [error, setError] = useState<string | null>(null);
-=======
-    const [email, setEmail] = useState('');
-    const [userId, setUserId] = useState('');
->>>>>>> origin/feature/profile-github-integration
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [name, setName] = useState('');
+    const [userId, setUserId] = useState('');
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
         setLoading(true);
-<<<<<<< HEAD
 
         try {
             if (isLogin) {
@@ -44,16 +35,6 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId: string) => void }) => 
         } finally {
             setLoading(false);
         }
-=======
-        // Use email as userId if userId not provided, or generate one
-        const finalUserId = userId.trim() || email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_') || `user_${Date.now()}`;
-        
-        // Simulate API call
-        setTimeout(() => {
-            setLoading(false);
-            onLogin(finalUserId);
-        }, 1200);
->>>>>>> origin/feature/profile-github-integration
     };
 
     return (
