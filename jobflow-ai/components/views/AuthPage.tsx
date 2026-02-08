@@ -1,19 +1,39 @@
 import React, { useState } from 'react';
-import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github } from 'lucide-react';
+import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, CheckCircle, BarChart2, ArrowRight } from 'lucide-react';
+import { authService } from '../../services/auth';
+import { GoogleLogin } from '@react-oauth/google';
 
 export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
     const [isLogin, setIsLogin] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [name, setName] = useState('');
+
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        setError(null);
         setLoading(true);
-        // Simulate API call
-        setTimeout(() => {
+
+        try {
+            if (isLogin) {
+                await authService.login(email, password);
+                onLogin();
+            } else {
+                await authService.signup(email, password, name);
+                // Auto login after signup
+                await authService.login(email, password);
+                onLogin();
+            }
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || 'Authentication failed. Please check your credentials.');
+        } finally {
             setLoading(false);
-            onLogin();
-        }, 1200);
+        }
     };
 
     return (
@@ -75,9 +95,11 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                     <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                     <input
                                         type="text"
+                                        value={name}
+                                        onChange={(e) => setName(e.target.value)}
                                         placeholder="Muhammad Ahmed"
                                         className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
-                                        required
+                                        required={!isLogin}
                                     />
                                 </div>
                             </div>
@@ -89,6 +111,8 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                 <MailIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                 <input
                                     type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
                                     placeholder="ahmed@example.com"
                                     className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                     required
@@ -105,6 +129,8 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                 <input
                                     type={showPassword ? "text" : "password"}
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
                                     placeholder="••••••••"
                                     className="w-full pl-12 pr-12 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                     required
@@ -118,6 +144,12 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                 </button>
                             </div>
                         </div>
+
+                        {error && (
+                            <div className="text-red-500 text-sm font-medium bg-red-50 p-3 rounded-xl border border-red-100 text-center animate-in fade-in slide-in-from-top-2">
+                                {error}
+                            </div>
+                        )}
 
                         <button
                             type="submit"
@@ -145,9 +177,30 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
-                        <button className="flex items-center justify-center gap-3 py-3 border border-slate-200 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors text-sm">
-                            <Chrome size={18} /> Google
-                        </button>
+                        <div className="flex justify-center">
+                            <GoogleLogin
+                                onSuccess={async (credentialResponse) => {
+                                    setLoading(true);
+                                    try {
+                                        if (credentialResponse.credential) {
+                                            await authService.loginWithGoogle(credentialResponse.credential);
+                                            onLogin();
+                                        }
+                                    } catch (err: any) {
+                                        setError(err.message || "Google login failed");
+                                    } finally {
+                                        setLoading(false);
+                                    }
+                                }}
+                                onError={() => {
+                                    setError("Google login failed");
+                                }}
+                                useOneTap
+                                theme="filled_blue"
+                                shape="pill"
+                                text="continue_with"
+                            />
+                        </div>
                         <button className="flex items-center justify-center gap-3 py-3 border border-slate-200 rounded-2xl font-bold text-slate-600 hover:bg-slate-50 transition-colors text-sm">
                             <Github size={18} /> GitHub
                         </button>
@@ -167,6 +220,3 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
         </div>
     );
 };
-
-// Add missing imports for icons used in the illustration side
-import { CheckCircle, BarChart2 } from 'lucide-react';

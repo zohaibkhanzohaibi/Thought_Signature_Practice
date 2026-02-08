@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CheckCircle, X } from 'lucide-react';
 import { ViewType, Application, Job, AppStatus } from './types';
 import { MOCK_APPLICATIONS, MOCK_USER } from './constants';
@@ -17,9 +17,16 @@ import { InboxView } from './components/views/InboxView';
 
 // Modals
 import { GenerationModal } from './components/modals/GenerationModal';
+import { authService } from './services/auth';
 
 const App = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    if (authService.isAuthenticated()) {
+      setIsAuthenticated(true);
+    }
+  }, []);
   const [currentView, setView] = useState<ViewType>('dashboard');
   const [darkMode, setDarkMode] = useState(false); // Helper state for now, logic inside Header/Components needs to respect it if implemented fully
   const [apps, setApps] = useState<Application[]>(MOCK_APPLICATIONS);
@@ -46,7 +53,10 @@ const App = () => {
       <Sidebar
         currentView={currentView}
         setView={setView}
-        onLogout={() => setIsAuthenticated(false)}
+        onLogout={() => {
+          authService.logout();
+          setIsAuthenticated(false);
+        }}
       />
 
       <div className="flex-1 flex flex-col">

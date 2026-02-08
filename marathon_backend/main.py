@@ -23,7 +23,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import routers
-from .routers import profile, campaigns, jobs, gmail
+# Import routers
+from .routers import profile, campaigns, jobs, gmail, auth
 
 
 @asynccontextmanager
@@ -86,6 +87,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers
+app.include_router(auth.router)
 app.include_router(profile.router)
 app.include_router(campaigns.router)
 app.include_router(jobs.router)
