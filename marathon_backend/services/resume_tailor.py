@@ -1,61 +1,13 @@
 """
-Resume Tailor Service - Analyzes JD and generates tailored resume using OpenRouter.
+Resume Tailor Service - Analyzes JD and generates tailored resume using Gemini Pro.
 Combines: Recruiter Agent (analysis) + Writer Agent (drafting) + Critic Agent (review loop)
 """
-import os
 import json
-import time
-import httpx
 from typing import Dict, Tuple, Optional
 from dotenv import load_dotenv
+from .gemini_client import call_gemini
 
 load_dotenv()
-
-# OpenRouter Configuration
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL_ID = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-preview")  # Default model
-
-
-def call_openrouter(messages: list, temperature: float = 0.3, max_retries: int = 3) -> str:
-    """
-    Call OpenRouter API with retry logic.
-    """
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://marathon-agent.local",
-        "X-Title": "Marathon Job Agent"
-    }
-    
-    payload = {
-        "model": MODEL_ID,
-        "messages": messages,
-        "temperature": temperature
-    }
-    
-    for attempt in range(max_retries):
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                response = client.post(OPENROUTER_BASE_URL, headers=headers, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                wait_time = (attempt + 1) * 5
-                print(f"⏳ Rate limited. Waiting {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                raise
-        except Exception as e:
-            print(f"❌ OpenRouter error (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-            else:
-                raise
-    
-    raise Exception("Max retries exceeded")
 
 
 # ============================================
@@ -96,7 +48,7 @@ Return ONLY raw JSON, no markdown:
     
     try:
         messages = [{"role": "user", "content": prompt}]
-        text = call_openrouter(messages, temperature=0.2)
+        text = call_gemini(prompt, max_tokens=2048, temperature=0.2)
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -206,7 +158,7 @@ TASK:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        text = call_openrouter(messages, temperature=0.3)
+        text = call_gemini(user_prompt, system=system_prompt, max_tokens=2048, temperature=0.3)
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -255,7 +207,7 @@ Return JSON:
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        text = call_openrouter(messages, temperature=0.1)
+        text = call_gemini(prompt, max_tokens=1024, temperature=0.1)
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -283,8 +235,8 @@ async def tailor_resume_for_job(
     profile: Dict,
     portfolio: Dict,
     job_description: str,
-    max_iterations: int = 3,
-    quality_threshold: int = 85
+        max_iterations: int,
+        quality_threshold: int
 ) -> Tuple[Dict, Dict, int]:
     """
     Full resume tailoring pipeline with review loop.
@@ -365,7 +317,7 @@ Return ONLY the email text, no subject line or headers.
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        return call_openrouter(messages, temperature=0.7)
+        return call_gemini(messages[-1]["content"], max_tokens=1024, temperature=0.7)
     except Exception as e:
         print(f"❌ Cover email generation failed: {e}")
         return f"""Dear Hiring Manager,
@@ -386,6 +338,28 @@ Best regards,
 # ============================================
 
 class ResumeTailorService:
+
+    async def tailor(self, job_description: str, max_iterations: int = 3, quality_threshold: int = 85):
+        """
+        Run the full tailoring pipeline for a job description.
+        Args:
+            job_description: Raw job description text
+            max_iterations: Max review iterations
+            quality_threshold: Minimum score to accept
+        Returns:
+            Tuple of (jd_analysis, tailored_resume, final_score)
+        """
+        jd_analysis, tailored_resume, score = await tailor_resume_for_job(
+            self.profile,
+            self.portfolio,
+            job_description,
+            max_iterations,
+            quality_threshold
+        )
+        self.last_jd_analysis = jd_analysis
+        self.last_tailored_resume = tailored_resume
+        self.last_score = score
+        return jd_analysis, tailored_resume, score
     """
     Service class for resume tailoring operations.
     Provides a unified interface for the complete tailoring pipeline.
@@ -414,22 +388,17 @@ class ResumeTailorService:
         Args:
             job_description: Raw job description text
             
-        Returns:
-            JD analysis with extracted skills, requirements, etc.
-        """
-        analysis = await analyze_job_description(job_description)
-        self.last_jd_analysis = analysis
-        return analysis
-    
-    async def tailor(
-        self, 
-        job_description: str,
-        max_iterations: int = 3,
-        quality_threshold: int = 85
-    ) -> Tuple[Dict, Dict, int]:
-        """
-        Run the full tailoring pipeline.
-        
+        try:
+            return call_gemini(prompt, max_tokens=512, temperature=0.7)
+        except Exception as e:
+            print(f"❌ Cover email generation failed: {e}")
+            return (
+                f"Dear Hiring Manager,\n\n"
+                f"I am writing to express my interest in the {jd_analysis.get('job_title')} position at {jd_analysis.get('company_name')}.\n\n"
+                f"With my experience in {', '.join(jd_analysis.get('hard_skills', ['software development'])[:3])}, I believe I would be a strong fit for this role.\n\n"
+                "I would welcome the opportunity to discuss how my skills align with your team's needs.\n\n"
+                f"Best regards,\n{{profile_name}}"
+            ).replace("{profile_name}", profile.get('full_name', ''))
         Args:
             job_description: Raw job description text
             max_iterations: Max review iterations
@@ -438,12 +407,21 @@ class ResumeTailorService:
         Returns:
             Tuple of (jd_analysis, tailored_resume, final_score)
         """
+        # Set defaults if not provided
+        try:
+            max_iterations
+        except NameError:
+            max_iterations = 3
+        try:
+            quality_threshold
+        except NameError:
+            quality_threshold = 85
         jd_analysis, tailored_resume, score = await tailor_resume_for_job(
-            profile=self.profile,
-            portfolio=self.portfolio,
-            job_description=job_description,
-            max_iterations=max_iterations,
-            quality_threshold=quality_threshold
+            self.profile,
+            self.portfolio,
+            job_description,
+            max_iterations,
+            quality_threshold
         )
         
         self.last_jd_analysis = jd_analysis
