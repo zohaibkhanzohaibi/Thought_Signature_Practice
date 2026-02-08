@@ -3,16 +3,18 @@ marathon_agent.py - Unified Marathon Agent for Job Search
 
 This is the main script that handles:
 1. User profile and campaign creation (form-based)
-2. Job search using AI prompts
+2. Job search using AI prompts with Google Search
 3. Job matching with user profile
 4. State persistence with thought signatures
 5. Resume capability across sessions
+6. Cron runner for GitHub Actions
 
 Usage:
   python marathon_agent.py --create    # Create a new campaign (interactive form)
   python marathon_agent.py --run       # Run one iteration for test user
   python marathon_agent.py --status    # Check campaign status
   python marathon_agent.py --list      # List all campaigns
+  python marathon_agent.py --cron      # Run all active campaigns (for GitHub Actions)
 """
 
 import os
@@ -98,7 +100,7 @@ def call_with_retry(api_func, max_retries=3, wait_seconds=60):
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-MODEL_ID = "gemini-3-flash-preview"
+MODEL_ID = "gemini-2.5-flash" #"gemini-3-flash-preview" 
 
 # Fixed Test User Profile
 TEST_USER = {
@@ -171,6 +173,25 @@ def get_user_applications(user_id: str):
     return supabase.table("job_applications").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
 
 
+def get_pending_applications(user_id: str):
+    """Get scouted jobs that haven't been applied to yet (no cover letter)."""
+    return supabase.table("job_applications").select("*").eq("user_id", user_id).eq("status", "scouted").order("created_at", desc=False).execute()
+
+
+def update_job_status(job_id: str, status: str, cover_letter: str = None):
+    """Update job application status and add cover letter."""
+    update_data = {
+        "status": status
+    }
+    if cover_letter:
+        update_data["replies_log"] = [{
+            "action": "applied",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "cover_letter": cover_letter[:500]
+        }]
+    return supabase.table("job_applications").update(update_data).eq("id", job_id).execute()
+
+
 def get_applied_job_keys(user_id: str) -> set:
     """Get a set of unique job keys (company|title) that have already been applied to."""
     apps = get_user_applications(user_id)
@@ -179,6 +200,23 @@ def get_applied_job_keys(user_id: str) -> set:
         key = f"{app['company_name'].lower().strip()}|{app['job_title'].lower().strip()}"
         applied_keys.add(key)
     return applied_keys
+
+
+def get_all_active_campaigns():
+    """Fetch all agent states with active campaigns."""
+    response = supabase.table("agent_states").select("*, profiles(*)").execute()
+    
+    active = []
+    for agent in response.data:
+        history = agent.get("history", [])
+        for item in history:
+            if isinstance(item, dict) and item.get("type") == "campaign_config":
+                if item.get("is_active", False):
+                    agent["_config"] = item
+                    active.append(agent)
+                break
+    
+    return active
 
 
 def get_job_key(job: dict) -> str:
@@ -507,83 +545,127 @@ def run_campaign_iteration(user_id: str = None):
     print(f"\n📅 Day {current_day}/{total_days} of campaign" + (" (FINAL DAY)" if is_last_day else ""))
     print(f"🎯 Target: {config.get('target_role')} in {config.get('location')}")
     
-    # Get previous applications to exclude from search
-    previous_apps = get_user_applications(user_id)
-    exclude_jobs = previous_apps.data if previous_apps.data else []
+    daily_limit = config.get("daily_limit", 3)
+    jobs_processed = 0
+    new_signature = None
     
-    if exclude_jobs:
-        print(f"📋 Excluding {len(exclude_jobs)} previously scouted jobs")
+    # STEP 1: Process pending (scouted but not applied) jobs first
+    pending_apps = get_pending_applications(user_id)
+    pending_jobs = pending_apps.data if pending_apps.data else []
     
-    # Use signature to continue conversation
-    new_prompt = f"Day {current_day}: Find me {config.get('daily_limit')} NEW {config.get('target_role')} jobs in {config.get('location')}. Focus on the latest openings not previously shown."
+    if pending_jobs:
+        print(f"\n📋 Found {len(pending_jobs)} pending jobs to apply to first")
+        
+        for app in pending_jobs:
+            if jobs_processed >= daily_limit:
+                break
+                
+            print(f"  ▶ {app['job_title']} at {app['company_name']}")
+            
+            # Generate cover letter for pending job
+            job_for_letter = {
+                "title": app["job_title"],
+                "company": app["company_name"],
+                "url": app.get("source_url"),
+                "description": "Previously scouted position"
+            }
+            
+            try:
+                cover_letter, sig = generate_cover_letter(job_for_letter, profile)
+                new_signature = sig or new_signature
+                print(f"    ✓ Cover letter generated")
+            except DailyLimitReached:
+                print(f"\n💾 Saving state before exit...")
+                state["thought_signature"] = encode_signature(new_signature) if new_signature else state.get("thought_signature")
+                state["internal_summary"] = f"Paused: Daily limit reached on day {current_day}, {jobs_processed} jobs applied"
+                state["history"] = history
+                save_agent_state(user_id, state)
+                print(f"   ✅ State saved. Resume when quota resets.")
+                return
+            except Exception as e:
+                cover_letter = None
+                print(f"    ✗ Cover letter failed: {e}")
+            
+            # Update job status to applied
+            update_job_status(app["id"], "applied", cover_letter)
+            jobs_processed += 1
+            print(f"    ✅ Applied ({jobs_processed}/{daily_limit})")
     
-    if state.get("thought_signature"):
-        print("🔐 Resuming with saved thought signature...")
-        response_text, new_signature = continue_with_signature(history, new_prompt)
-    else:
-        # Fresh search
-        jobs, new_signature = search_jobs_with_ai(
+    # STEP 2: If quota remaining, search for new jobs
+    remaining_quota = daily_limit - jobs_processed
+    
+    if remaining_quota > 0:
+        print(f"\n🔎 Searching for {remaining_quota} new jobs...")
+        
+        # Get previously applied jobs to exclude
+        applied_keys = get_applied_job_keys(user_id)
+        previous_apps = get_user_applications(user_id)
+        exclude_jobs = previous_apps.data if previous_apps.data else []
+        
+        # Search for new jobs
+        jobs, search_sig = search_jobs_with_ai(
             config.get("target_role"),
             profile,
             config.get("location"),
             exclude_jobs=exclude_jobs
         )
-        response_text = f"Found {len(jobs)} jobs for day {current_day}"
+        new_signature = search_sig or new_signature
+        
+        # Filter out duplicates
+        new_jobs = []
+        for job in jobs:
+            job_key = get_job_key(job)
+            if job_key not in applied_keys:
+                new_jobs.append(job)
+            else:
+                print(f"  ⏭ Skipping duplicate: {job['title']} at {job['company']}")
+        
+        if new_jobs:
+            print(f"\n📋 Processing {min(len(new_jobs), remaining_quota)} new jobs:\n")
+            
+            for job in new_jobs[:remaining_quota]:
+                posted = job.get('posted_date', 'Unknown')
+                print(f"  ▶ {job['title']} at {job['company']} (Posted: {posted})")
+                
+                # Generate cover letter
+                try:
+                    cover_letter, sig = generate_cover_letter(job, profile)
+                    new_signature = sig or new_signature
+                    print(f"    ✓ Cover letter generated")
+                except DailyLimitReached:
+                    print(f"\n💾 Saving state before exit...")
+                    state["thought_signature"] = encode_signature(new_signature) if new_signature else state.get("thought_signature")
+                    state["internal_summary"] = f"Paused: Daily limit reached on day {current_day}, {jobs_processed} jobs applied"
+                    state["history"] = history
+                    save_agent_state(user_id, state)
+                    print(f"   ✅ State saved. Resume when quota resets.")
+                    return
+                except Exception as e:
+                    cover_letter = None
+                    print(f"    ✗ Cover letter failed: {e}")
+                
+                # Save new job as "applied" directly
+                supabase.table("job_applications").insert({
+                    "user_id": user_id,
+                    "job_title": job["title"],
+                    "company_name": job["company"],
+                    "source_url": job.get("url"),
+                    "status": "applied",
+                    "replies_log": [{
+                        "action": "applied",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "cover_letter": cover_letter[:500] if cover_letter else None
+                    }]
+                }).execute()
+                jobs_processed += 1
+                print(f"    ✅ Applied ({jobs_processed}/{daily_limit})")
+        else:
+            print("  ⚠️ No new jobs found after filtering duplicates.")
     
     # Update history
+    new_prompt = f"Day {current_day}: Applied to {jobs_processed} {config.get('target_role')} jobs"
     history.append({"role": "user", "parts": [{"text": new_prompt}]})
-    history.append({"role": "model", "parts": [{"text": response_text, "thought_signature": encode_signature(new_signature)}]})
-    
-    # Get fresh jobs (request more to account for duplicates)
-    jobs, _ = search_jobs_with_ai(config.get("target_role"), profile, config.get("location"))
-    
-    # Get previously applied jobs to filter duplicates
-    applied_keys = get_applied_job_keys(user_id)
-    
-    # Filter out already-applied jobs
-    new_jobs = []
-    for job in jobs:
-        job_key = get_job_key(job)
-        if job_key not in applied_keys:
-            new_jobs.append(job)
-        else:
-            print(f"  ⏭ Skipping duplicate: {job['title']} at {job['company']}")
-    
-    if not new_jobs:
-        print("\n⚠️ No new jobs found. All results were duplicates.")
-        print("   Try running again later or adjust your search criteria.")
-        return
-    
-    # Process and save jobs
-    jobs_processed = 0
-    daily_limit = config.get("daily_limit", 3)
-    
-    print(f"\n📋 Processing {min(len(new_jobs), daily_limit)} new jobs:\n")
-    for job in new_jobs[:daily_limit]:
-        posted = job.get('posted_date', 'Unknown')
-        print(f"  ▶ {job['title']} at {job['company']} (Posted: {posted})")
-        
-        # Generate cover letter
-        try:
-            cover_letter, _ = generate_cover_letter(job, profile)
-            print(f"    ✓ Cover letter generated")
-        except DailyLimitReached:
-            # Save state and exit gracefully on daily limit
-            print(f"\n💾 Saving state before exit...")
-            state["thought_signature"] = encode_signature(new_signature) if new_signature else state.get("thought_signature")
-            state["internal_summary"] = f"Paused: Daily limit reached on day {current_day}, {jobs_processed} jobs processed"
-            state["history"] = history
-            save_agent_state(user_id, state)
-            print(f"   ✅ State saved. Resume when quota resets.")
-            print(f"   ⏰ Daily quota typically resets at midnight UTC.")
-            return
-        except Exception as e:
-            cover_letter = None
-            print(f"    ✗ Cover letter failed: {e}")
-        
-        # Save to database
-        save_job_application(user_id, job, cover_letter)
-        jobs_processed += 1
+    history.append({"role": "model", "parts": [{"text": f"Applied to {jobs_processed} jobs", "thought_signature": encode_signature(new_signature)}]})
     
     # Update campaign state
     config["current_day"] = current_day + 1
@@ -660,6 +742,52 @@ def show_status():
     print(f"\n⏰ Last Updated: {state.get('last_updated', 'N/A')}")
 
 
+def run_all_campaigns():
+    """Process all active campaigns (for cron/GitHub Actions)."""
+    
+    def log(msg):
+        print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}")
+    
+    log("=" * 50)
+    log("🚀 MARATHON AGENT - CRON JOB RUNNER")
+    log("=" * 50)
+    
+    active_campaigns = get_all_active_campaigns()
+    log(f"📊 Found {len(active_campaigns)} active campaigns")
+    
+    if not active_campaigns:
+        log("💤 No active campaigns to process")
+        return
+    
+    for agent_state in active_campaigns:
+        try:
+            user_id = agent_state.get("user_id")
+            profile = agent_state.get("profiles", {})
+            config = agent_state.get("_config", {})
+            
+            full_name = profile.get("full_name", user_id[:8])
+            current_day = config.get("current_day", 1)
+            total_days = config.get("total_days", 5)
+            
+            log(f"▶️ {full_name}: Day {current_day}/{total_days}")
+            
+            # Use existing run_campaign_iteration logic
+            run_campaign_iteration(user_id=user_id)
+            
+            log(f"✅ {full_name} processed")
+            
+        except DailyLimitReached:
+            log(f"🚫 Daily limit reached. Stopping cron run.")
+            break
+        except Exception as e:
+            user_id = agent_state.get("user_id", "unknown")
+            log(f"❌ Error processing {user_id[:8]}...: {e}")
+    
+    log("=" * 50)
+    log("✅ CRON JOB COMPLETE")
+    log("=" * 50)
+
+
 def list_all_campaigns():
     """List all campaigns from all users."""
     print("\n" + "="*60)
@@ -734,6 +862,8 @@ def main():
         show_status()
     elif command == "--list":
         list_all_campaigns()
+    elif command == "--cron":
+        run_all_campaigns()
     else:
         print(f"Unknown command: {command}")
         print(__doc__)
