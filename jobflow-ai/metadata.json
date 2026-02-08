@@ -1,0 +1,8 @@
+{
+  "name": "JobFlow AI",
+  "description": "An intelligent job application platform featuring AI-powered tracking, profile management, and application generation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
