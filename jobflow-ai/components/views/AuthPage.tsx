@@ -22,12 +22,14 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) =>
         try {
             if (isLogin) {
                 await authService.login(email, password);
-                onLogin();
+                const id = authService.getUserIdFromToken();
+                onLogin(id || undefined);
             } else {
                 await authService.signup(email, password, name);
                 // Auto login after signup
                 await authService.login(email, password);
-                onLogin();
+                const id = authService.getUserIdFromToken();
+                onLogin(id || undefined);
             }
         } catch (err: any) {
             console.error(err);
@@ -187,7 +189,8 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) =>
                                     try {
                                         if (credentialResponse.credential) {
                                             await authService.loginWithGoogle(credentialResponse.credential);
-                                            onLogin();
+                                            const id = authService.getUserIdFromToken();
+                                            onLogin(id || undefined);
                                         }
                                     } catch (err: any) {
                                         setError(err.message || "Google login failed");

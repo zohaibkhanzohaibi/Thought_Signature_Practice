@@ -26,8 +26,8 @@ const App = () => {
   useEffect(() => {
     if (authService.isAuthenticated()) {
       setIsAuthenticated(true);
-      // Ideally we would fetch the user profile here to set userId
-      // For now we rely on the ProfileView fetching its own data
+      const id = authService.getUserIdFromToken();
+      if (id) setUserId(id);
     }
   }, []);
 
