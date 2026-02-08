@@ -1,18 +1,23 @@
 import React, { useState } from 'react';
-import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github } from 'lucide-react';
+import { User, Mail as MailIcon, Lock, Eye, EyeOff, LogIn, UserPlus, Chrome, Github, Hash } from 'lucide-react';
 
-export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
+export const AuthPage = ({ onLogin }: { onLogin: (userId: string) => void }) => {
     const [isLogin, setIsLogin] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [email, setEmail] = useState('');
+    const [userId, setUserId] = useState('');
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
+        // Use email as userId if userId not provided, or generate one
+        const finalUserId = userId.trim() || email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_') || `user_${Date.now()}`;
+        
         // Simulate API call
         setTimeout(() => {
             setLoading(false);
-            onLogin();
+            onLogin(finalUserId);
         }, 1200);
     };
 
@@ -89,9 +94,25 @@ export const AuthPage = ({ onLogin }: { onLogin: () => void }) => {
                                 <MailIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                 <input
                                     type="email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
                                     placeholder="ahmed@example.com"
                                     className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                     required
+                                />
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">User ID (optional)</label>
+                            <div className="relative">
+                                <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                <input
+                                    type="text"
+                                    value={userId}
+                                    onChange={(e) => setUserId(e.target.value)}
+                                    placeholder="my_unique_id (auto-generated from email if empty)"
+                                    className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all"
                                 />
                             </div>
                         </div>
