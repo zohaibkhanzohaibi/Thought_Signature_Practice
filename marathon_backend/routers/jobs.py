@@ -1,7 +1,7 @@
 """
 Jobs Router - Job applications and application workflow endpoints.
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 
@@ -10,6 +10,9 @@ from ..models.schemas import JobResponse, JobApplicationUpdate, GmailDraftCreate
 from ..services.resume_tailor import ResumeTailorService
 from ..services.gmail_service import GmailService
 from ..services.pdf_renderer import generate_resume_pdf, convert_tailored_to_pdf_data
+from ..models.schemas import RawJobPost, PublicJobCreate, PublicJobResponse
+from ..services.job_parser import parse_job_text
+from .auth import get_current_user
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
 db = MarathonDB()
@@ -339,7 +342,7 @@ async def get_job_stats(user_id: str):
     return stats
 
 @router.post("/{job_id}/mark-applied")
-async def mark_job_as_applied(job_id: int):
+async def mark_job_as_applied(job_id: str):
     """
     Mark a scouted job as manually applied by the user.
     Sets status to 'applied' and records applied_at timestamp.
@@ -354,3 +357,63 @@ async def mark_job_as_applied(job_id: int):
         "applied_at": datetime.now(timezone.utc).isoformat()
     }).eq("id", job_id).execute()
     return {"message": "Job marked as applied"}
+
+
+# 1. Parse Endpoint
+@router.post("/parse-raw")
+async def analyze_raw_job(
+    post: RawJobPost, 
+    user = Depends(get_current_user) # <--- Auth Guard
+):
+    # We don't strictly need the user ID for parsing, but this protects the API
+    # so only logged-in users can use your AI quota.
+    extracted_data = await parse_job_text(post.raw_text)
+    return extracted_data
+
+# 2. Public Job Endpoint
+@router.post("/public", response_model=PublicJobResponse)
+async def post_public_job(
+    job: PublicJobCreate, 
+    user = Depends(get_current_user) # <--- Auth Guard returns the user
+):
+    # Prepare data for DB
+    job_data = job.model_dump()
+    
+    # INJECT USER ID HERE
+    job_data['original_poster_id'] = user["id"]
+    
+    res = db.client.table("public_job_listings").insert(job_data).execute()
+    return res.data[0]
+
+# 3. Endpoint to List Public Jobs
+@router.get("/public/feed")
+async def get_public_jobs(limit: int = 20):
+    """Get the feed of community sourced jobs."""
+    res = db.client.table("public_job_listings").select("*").order("created_at", desc=True).limit(limit).execute()
+    return res.data
+
+# 4. Save to Profile Endpoint
+@router.post("/public/{public_job_id}/save-to-profile")
+async def save_public_job_to_profile(
+    public_job_id: int, 
+    user = Depends(get_current_user) # <--- Backend derives ID
+):
+    # Fetch public job
+    pub_job = db.client.table("public_job_listings").select("*").eq("id", public_job_id).single().execute()
+    data = pub_job.data
+    
+    new_app = {
+        "user_id": user["id"],
+        "job_title": data.get("title"),  # Use .get() for safety
+        "company": data.get("company"),    # Changed from company_name to company to match schema
+        "job_description": data.get("description"),
+        "location": data.get("location"),
+        "contact_email": data.get("contact_email"), # Changed to likely schema match
+        "job_url": data.get("source_url"), # Changed from source_url to job_url
+        "status": "scouted",
+        "match_score": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    res = db.client.table("job_applications").insert(new_app).execute()
+    return res.data[0]
