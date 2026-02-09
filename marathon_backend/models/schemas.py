@@ -183,6 +183,7 @@ class JobResponse(BaseModel):
     last_activity_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     replies_log: Optional[List[Dict]] = []
+    campaign_id: Optional[str] = None
 
     class Config:
         from_attributes = True
