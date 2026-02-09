@@ -269,7 +269,7 @@ class MarathonDB:
         return update_profile(user_id, data)
     
     # Agent state operations
-    def get_agent_state(self, state_id: int) -> Optional[Dict]:
+    def get_agent_state(self, state_id: str) -> Optional[Dict]:
         res = supabase.table("agent_states").select("*").eq("id", state_id).single().execute()
         return res.data if res.data else None
     
@@ -323,7 +323,7 @@ class MarathonDB:
         return delete_gmail_token(user_id)
     
     # Campaign run operations
-    def create_campaign_run(self, user_id: str, agent_state_id: int, run_type: str = "search") -> Dict:
+    def create_campaign_run(self, user_id: str, agent_state_id: str, run_type: str = "search") -> Dict:
         res = supabase.table("campaign_runs").insert({
             "user_id": user_id,
             "agent_state_id": agent_state_id,
@@ -333,7 +333,7 @@ class MarathonDB:
         }).execute()
         return res.data[0] if res.data else None
     
-    def update_campaign_run(self, run_id: int, status: str = None, jobs_found: int = None, 
+    def update_campaign_run(self, run_id: str, status: str = None, jobs_found: int = None, 
                            jobs_applied: int = None, summary: str = None) -> Dict:
         data = {}
         if status:

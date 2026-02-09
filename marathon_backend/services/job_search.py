@@ -223,6 +223,7 @@ class JobSearchAgent:
     ) -> List[Dict]:
         """
         Search for jobs matching the query and profile.
+        Use advanced Google search techniques (site:linkedin.com/jobs OR site:indeed.com , filter by last 7 days, include 'apply' or 'application email' keywords) to find jobs.
         
         Args:
             query: Job search query (e.g., "Python Developer")

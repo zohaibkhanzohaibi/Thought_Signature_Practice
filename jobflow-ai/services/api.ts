@@ -78,10 +78,115 @@ export interface SkillsSummary {
 }
 
 // ============================================
+// CAMPAIGN TYPES
+// ============================================
+
+export type JobStatus = 
+  | 'scouted' 
+  | 'analyzing' 
+  | 'tailored' 
+  | 'drafted' 
+  | 'sent' 
+  | 'replied' 
+  | 'interview' 
+  | 'offer' 
+  | 'rejected' 
+  | 'withdrawn';
+
+export interface CampaignConfig {
+  name: string;
+  job_titles: string[];
+  locations: string[];
+  keywords?: string[];
+  excluded_companies?: string[];
+  total_days: number;
+  jobs_per_day: number;
+  auto_apply: boolean;
+  started_at?: string;
+  paused?: boolean;
+  completed?: boolean;
+  created_at?: string;
+}
+
+export interface Campaign {
+  id: string;
+  user_id: string;
+  name: string;
+  status: 'active' | 'paused' | 'completed';
+  config: CampaignConfig;
+  created_at: string;
+  thought_signature?: any;
+  last_run?: string;
+  current_day?: number;
+  days_remaining?: number;
+  jobs_applied_today?: number;
+  stats?: {
+    total_jobs: number;
+    by_status: Record<string, number>;
+  };
+}
+
+export interface CampaignRun {
+  id: string;
+  agent_state_id: string;
+  run_type: string;
+  status: string;
+  jobs_found: number;
+  jobs_applied: number;
+  summary?: string;
+  started_at: string;
+  completed_at?: string;
+}
+
+export interface CampaignCreateRequest {
+  user_id: string;
+  name: string;
+  job_titles: string[];
+  locations: string[];
+  keywords?: string[];
+  excluded_companies?: string[];
+  total_days?: number;
+  jobs_per_day?: number;
+  auto_apply?: boolean;
+}
+
+// ============================================
+// JOB TYPES
+// ============================================
+
+export interface JobApplication {
+  id: number;
+  user_id: string;
+  job_title: string;
+  company_name: string;
+  location?: string;
+  source_url?: string;
+  job_description?: string;
+  posted_date?: string;
+  match_score?: number;
+  status: JobStatus;
+  jd_analysis?: Record<string, any>;
+  tailored_resume?: Record<string, any>;
+  cover_email?: string;
+  resume_pdf_path?: string;
+  gmail_draft_id?: string;
+  company_email?: string;
+  applied_at?: string;
+  last_activity_at?: string;
+  created_at: string;
+  replies_log?: any[];
+}
+
+// ============================================
 // API FUNCTIONS
 // ============================================
 
 class ApiService {
+    async markJobAsApplied(jobId: number): Promise<any> {
+      return this.request<any>(`/jobs/${jobId}/mark-applied`, {
+        method: 'POST',
+      });
+    }
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -160,14 +265,46 @@ class ApiService {
   // CAMPAIGNS ENDPOINTS
   // ============================================
 
-  async getCampaigns(userId: string): Promise<any[]> {
-    return this.request<any[]>(`/campaigns/${userId}`);
+  async getCampaigns(userId: string): Promise<Campaign[]> {
+    return this.request<Campaign[]>(`/campaigns/user/${userId}`);
   }
 
-  async createCampaign(campaign: any): Promise<any> {
-    return this.request<any>('/campaigns', {
+  async getCampaign(campaignId: string): Promise<Campaign> {
+    return this.request<Campaign>(`/campaigns/${campaignId}`);
+  }
+
+  async createCampaign(campaign: CampaignCreateRequest): Promise<Campaign> {
+    return this.request<Campaign>('/campaigns/', {
       method: 'POST',
       body: JSON.stringify(campaign),
+    });
+  }
+
+  async runCampaign(campaignId: string): Promise<{ run_id: string; status: string; message: string }> {
+    return this.request(`/campaigns/${campaignId}/run`, {
+      method: 'POST',
+    });
+  }
+
+  async getCampaignRuns(campaignId: string, limit: number = 10): Promise<CampaignRun[]> {
+    return this.request<CampaignRun[]>(`/campaigns/${campaignId}/runs?limit=${limit}`);
+  }
+
+  async pauseCampaign(campaignId: string): Promise<{ status: string }> {
+    return this.request(`/campaigns/${campaignId}/pause`, {
+      method: 'PATCH',
+    });
+  }
+
+  async resumeCampaign(campaignId: string): Promise<{ status: string }> {
+    return this.request(`/campaigns/${campaignId}/resume`, {
+      method: 'PATCH',
+    });
+  }
+
+  async deleteCampaign(campaignId: string): Promise<{ status: string }> {
+    return this.request(`/campaigns/${campaignId}`, {
+      method: 'DELETE',
     });
   }
 
@@ -175,23 +312,30 @@ class ApiService {
   // JOBS ENDPOINTS
   // ============================================
 
-  async getJobs(userId: string, status?: string): Promise<any[]> {
+  async getJobs(userId: string, status?: string): Promise<JobApplication[]> {
     const params = status ? `?status=${status}` : '';
-    return this.request<any[]>(`/jobs/${userId}${params}`);
+    return this.request<JobApplication[]>(`/jobs/user/${userId}${params}`);
   }
 
-  async getJob(userId: string, jobId: string): Promise<any> {
-    return this.request<any>(`/jobs/${userId}/${jobId}`);
+  async getJob(jobId: number): Promise<JobApplication> {
+    return this.request<JobApplication>(`/jobs/${jobId}`);
   }
 
-  async tailorResume(userId: string, jobId: string): Promise<any> {
-    return this.request<any>(`/jobs/${userId}/${jobId}/tailor`, {
+  async updateJob(jobId: number, update: Partial<JobApplication>): Promise<JobApplication> {
+    return this.request<JobApplication>(`/jobs/${jobId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(update),
+    });
+  }
+
+  async tailorResume(jobId: number): Promise<any> {
+    return this.request<any>(`/jobs/${jobId}/tailor`, {
       method: 'POST',
     });
   }
 
-  async generateCoverLetter(userId: string, jobId: string): Promise<any> {
-    return this.request<any>(`/jobs/${userId}/${jobId}/cover-letter`, {
+  async generatePdf(jobId: number): Promise<any> {
+    return this.request<any>(`/jobs/${jobId}/generate-pdf`, {
       method: 'POST',
     });
   }

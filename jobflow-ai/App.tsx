@@ -14,6 +14,7 @@ import { JobDiscoveryView } from './components/views/JobDiscoveryView';
 import { ManagerView } from './components/views/ManagerView';
 import { ProfileView } from './components/views/ProfileView';
 import { InboxView } from './components/views/InboxView';
+import { ApplicationsView } from './components/views/ApplicationsView';
 
 // Modals
 import { GenerationModal } from './components/modals/GenerationModal';
@@ -74,7 +75,7 @@ const App = () => {
         <main className="flex-1 p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
           {currentView === 'dashboard' && <DashboardView apps={apps} onAdd={() => setView('discovery')} />}
           {currentView === 'discovery' && <JobDiscoveryView onApply={(j) => setIsApplying(j)} />}
-          {currentView === 'manager' && <ManagerView apps={apps} />}
+          {currentView === 'manager' && <ApplicationsView userId={userId} />}
           {currentView === 'profile' && <ProfileView userId={userId} />}
           {currentView === 'inbox' && <InboxView />}
 

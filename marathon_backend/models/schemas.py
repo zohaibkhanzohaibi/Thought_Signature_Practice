@@ -87,7 +87,8 @@ class CampaignCreate(BaseModel):
     locations: List[str] = Field(default=["Remote"], description="Preferred locations")
     keywords: Optional[List[str]] = Field(default=[], description="Additional search keywords")
     excluded_companies: Optional[List[str]] = Field(default=[], description="Companies to avoid")
-    max_jobs_per_run: int = Field(default=5, ge=1, le=20, description="Jobs per run")
+    total_days: int = Field(default=7, ge=1, le=90, description="Total days to run campaign")
+    jobs_per_day: int = Field(default=5, ge=1, le=50, description="Max jobs to apply per day")
     auto_apply: bool = Field(default=False, description="Auto-create Gmail drafts")
 
 
@@ -97,27 +98,33 @@ class CampaignConfig(BaseModel):
     locations: List[str] = []
     keywords: List[str] = []
     excluded_companies: List[str] = []
-    max_jobs_per_run: int = 5
+    total_days: int = 7
+    jobs_per_day: int = 5
     auto_apply: bool = False
+    started_at: Optional[str] = None
     created_at: Optional[str] = None
     paused: bool = False
+    completed: bool = False
 
 
 class CampaignResponse(BaseModel):
-    id: int
+    id: str
     user_id: str
     name: str
-    status: str = "active"
+    status: str = "active"  # active, paused, completed, expired
     config: Dict[str, Any]
     created_at: Optional[datetime] = None
+    current_day: Optional[int] = None
+    days_remaining: Optional[int] = None
+    jobs_applied_today: Optional[int] = None
 
     class Config:
         from_attributes = True
 
 
 class CampaignRunResponse(BaseModel):
-    id: int
-    campaign_id: int
+    id: str
+    campaign_id: str
     status: str = "started"
     message: str = "Campaign run started"
     jobs_found: int = 0

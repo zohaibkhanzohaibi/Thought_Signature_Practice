@@ -58,22 +58,33 @@ async def update_job(job_id: int, update: JobApplicationUpdate):
 
 
 @router.post("/{job_id}/tailor")
-async def tailor_resume_for_job(job_id: int, background_tasks: BackgroundTasks = None):
+async def tailor_resume_for_job(job_id: str, background_tasks: BackgroundTasks = None):
     """
     Tailor resume and generate cover email for a job.
     Uses the multi-agent pipeline (recruiter -> writer -> critic).
     """
+    import logging
+    logger = logging.getLogger("tailor_resume")
+    logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    if not logger.hasHandlers():
+        logger.addHandler(handler)
+
     job = db.get_job_application(job_id)
     if not job:
+        logger.error("Job not found for job_id=%s", job_id)
         raise HTTPException(status_code=404, detail="Job not found")
     
     profile = db.get_profile(job["user_id"])
     if not profile:
+        logger.error("User profile not found for user_id=%s", job.get("user_id"))
         raise HTTPException(status_code=404, detail="User profile not found")
     
     # Get job description
     jd = job.get("job_description") or job.get("jd_analysis", {}).get("raw_jd", "")
     if not jd:
+        logger.error("Job description missing for job_id=%s", job_id)
         raise HTTPException(
             status_code=400, 
             detail="Job description required. Update job with job_description first."
@@ -83,41 +94,49 @@ async def tailor_resume_for_job(job_id: int, background_tasks: BackgroundTasks =
     resume_text = profile.get("raw_resume_text", "")
     if not resume_text and profile.get("resume_data"):
         resume_text = str(profile["resume_data"])
-    
+    # Fallback: use parsed_resume if present
+    if not resume_text and profile.get("parsed_resume"):
+        parsed = profile["parsed_resume"]
+        resume_text = parsed if isinstance(parsed, dict) else str(parsed)
+    logger.debug("Resume text type: %s, value: %s", type(resume_text), str(resume_text)[:200])
     if not resume_text:
+        logger.error("Resume not found for user_id=%s", job.get("user_id"))
         raise HTTPException(status_code=400, detail="Resume not found. Upload resume first.")
     
     # Run tailoring pipeline
-    tailor_service = ResumeTailorService()
-    
-    # Analyze JD
-    jd_analysis = await tailor_service.analyze_job_description(jd)
-    
-    # Tailor resume
-    tailored = await tailor_service.tailor_resume_for_job(resume_text, jd)
-    
-    # Generate cover email
-    cover_email = await tailor_service.generate_cover_email(
-        resume_text, 
-        jd, 
-        profile.get("full_name", "Applicant")
-    )
+    try:
+        tailor_service = ResumeTailorService(profile=resume_text)
+        logger.debug("Starting JD analysis")
+        jd_analysis = await tailor_service.analyze_jd(jd)
+        logger.debug("JD analysis complete")
+        logger.debug("Starting resume tailoring")
+        # Use the class's tailor method, which expects job_description and uses self.profile
+        tailor_result = await tailor_service.tailor(jd)
+        logger.debug("Resume tailoring complete")
+        logger.debug("Starting cover email generation")
+        # tailor returns (jd_analysis, tailored_resume, final_score)
+        jd_analysis2, tailored_resume, final_score = tailor_result
+        cover_email = await tailor_service.generate_email(jd_analysis=jd_analysis2, tailored_resume=tailored_resume)
+        logger.debug("Cover email generation complete")
+    except Exception as e:
+        logger.exception("Error during tailoring pipeline: %s", e)
+        raise HTTPException(status_code=500, detail=f"Tailoring pipeline failed: {e}")
     
     # Update job with tailored content
     update_data = {
         "status": "tailored",
-        "jd_analysis": jd_analysis,
-        "tailored_resume": tailored.get("final_resume"),
+        "jd_analysis": jd_analysis2,
+        "tailored_resume": tailored_resume,
         "cover_letter": cover_email
     }
     db.client.table("job_applications").update(update_data).eq("id", job_id).execute()
     
     return {
         "message": "Resume tailored successfully",
-        "jd_analysis": jd_analysis,
-        "tailored_resume": tailored.get("final_resume"),
+        "jd_analysis": jd_analysis2,
+        "tailored_resume": tailored_resume,
         "cover_email": cover_email,
-        "critique": tailored.get("critique")
+        "final_score": final_score
     }
 
 
@@ -318,3 +337,20 @@ async def get_job_stats(user_id: str):
                 stats["this_month"] += 1
     
     return stats
+
+@router.post("/{job_id}/mark-applied")
+async def mark_job_as_applied(job_id: int):
+    """
+    Mark a scouted job as manually applied by the user.
+    Sets status to 'applied' and records applied_at timestamp.
+    """
+    job = db.get_job_application(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") not in ["scouted", "tailored", "drafted"]:
+        raise HTTPException(status_code=400, detail="Job is not in a state that can be marked as applied")
+    db.client.table("job_applications").update({
+        "status": "applied",
+        "applied_at": datetime.now(timezone.utc).isoformat()
+    }).eq("id", job_id).execute()
+    return {"message": "Job marked as applied"}

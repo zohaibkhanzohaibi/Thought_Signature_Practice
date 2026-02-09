@@ -43,6 +43,7 @@ def get_active_campaigns(api_url: str) -> list:
     # we'll query Supabase directly
     from supabase import create_client
     from dotenv import load_dotenv
+    from datetime import datetime, timezone
     load_dotenv()
     
     client = create_client(
@@ -54,14 +55,46 @@ def get_active_campaigns(api_url: str) -> list:
     result = client.table("agent_states").select("id, user_id, config").execute()
     
     active = []
+    now = datetime.now(timezone.utc)
+    
     for state in result.data or []:
         config = state.get("config", {})
-        if not config.get("paused", False):
-            active.append({
-                "id": state["id"],
-                "user_id": state["user_id"],
-                "name": config.get("name", "Unnamed")
-            })
+        
+        # Skip paused campaigns
+        if config.get("paused", False):
+            continue
+        
+        # Skip completed campaigns
+        if config.get("completed", False):
+            continue
+        
+        # Check if campaign has expired (days exceeded)
+        started_at = config.get("started_at") or config.get("created_at")
+        total_days = config.get("total_days", 7)
+        
+        if started_at:
+            try:
+                if isinstance(started_at, str):
+                    start_date = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                else:
+                    start_date = started_at
+                
+                days_elapsed = (now - start_date).days
+                if days_elapsed >= total_days:
+                    # Mark as completed in database
+                    config["completed"] = True
+                    client.table("agent_states").update({"config": config}).eq("id", state["id"]).execute()
+                    print(f"📅 Campaign {state['id']} expired after {total_days} days")
+                    continue
+            except Exception as e:
+                print(f"⚠️ Error checking campaign {state['id']} expiry: {e}")
+        
+        active.append({
+            "id": state["id"],
+            "user_id": state["user_id"],
+            "name": config.get("name", "Unnamed"),
+            "jobs_per_day": config.get("jobs_per_day", 5)
+        })
     
     return active
 
