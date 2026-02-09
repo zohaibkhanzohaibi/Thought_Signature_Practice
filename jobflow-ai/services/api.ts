@@ -157,6 +157,7 @@ export interface CampaignCreateRequest {
 export interface JobApplication {
   id: number;
   user_id: string;
+  campaign_id?: string;
   job_title: string;
   company: string;
   location?: string;

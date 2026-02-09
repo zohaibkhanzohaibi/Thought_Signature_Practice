@@ -20,17 +20,31 @@ export const AuthPage = ({ onLogin }: { onLogin: (userId?: string) => void }) =>
         setLoading(true);
 
         try {
+            let userId: string | null = null;
+
             if (isLogin) {
+                // LOGIN FLOW
                 await authService.login(email, password);
-                const id = authService.getUserIdFromToken();
-                onLogin(id || undefined);
+                userId = authService.getUserIdFromToken();
             } else {
+                // SIGNUP FLOW
+                // Pass 'name' to signup so backend can create profile
                 await authService.signup(email, password, name);
+                
                 // Auto login after signup
                 await authService.login(email, password);
-                const id = authService.getUserIdFromToken();
-                onLogin(id || undefined);
+                userId = authService.getUserIdFromToken();
             }
+
+            if (userId) {
+                // --- THE FIX IS HERE ---
+                // We must save the ID where the Header expects to find it
+                localStorage.setItem('marathon_user_id', userId);
+                onLogin(userId);
+            } else {
+                setError("Failed to retrieve user ID.");
+            }
+
         } catch (err: any) {
             console.error(err);
             setError(err.message || 'Authentication failed. Please check your credentials.');

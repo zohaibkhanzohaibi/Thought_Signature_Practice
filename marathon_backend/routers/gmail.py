@@ -1,3 +1,4 @@
+import requests
 from pydantic import BaseModel
 from ..models.schemas import GmailConnectRequest
 from ..services import socketio_service
@@ -8,10 +9,6 @@ class SendEmailRequest(BaseModel):
     to: str
     subject: str
     body: str
-
-# Request model for disconnect
-class DisconnectRequest(BaseModel):
-    user_id: str
 
 """
 Gmail Router - Gmail OAuth and inbox monitoring endpoints.
@@ -26,6 +23,7 @@ from ..services.gmail_service import GmailService
 router = APIRouter(prefix="/api/gmail", tags=["Gmail"])
 db = MarathonDB()
 
+active_monitors = {}
 
 @router.get("/auth")
 async def start_auth(user_id: str = Query(..., description="User ID to associate with Gmail")):
@@ -84,8 +82,14 @@ async def oauth_callback(code: str = None, state: str = None, error: str = None)
 
 @router.get("/status/{user_id}")
 async def check_gmail_status(user_id: str):
-    """Check if user has connected Gmail."""
+    """Check if user has connected Gmail (Checks DB first, then Memory)."""
+    
+    # 1. Try DB
     tokens = db.get_gmail_tokens(user_id)
+    
+    # 2. Try Memory (Fallback)
+    if not tokens:
+        tokens = active_monitors.get(user_id)
     
     if not tokens:
         return {
@@ -93,8 +97,10 @@ async def check_gmail_status(user_id: str):
             "message": "Gmail not connected. Visit /api/gmail/auth?user_id={user_id} to connect."
         }
     
-    # Try to validate tokens
+    # 3. Validate Connection
     try:
+        # If it's a dict from memory, use it directly. If from DB object, might need conversion.
+        # Assuming your GmailService handles dicts:
         gmail = GmailService(tokens)
         return {
             "connected": True,
@@ -102,6 +108,10 @@ async def check_gmail_status(user_id: str):
             "message": "Gmail connected and working"
         }
     except Exception as e:
+        # If the token in memory is bad, clear it so we don't loop forever
+        if user_id in active_monitors:
+            del active_monitors[user_id]
+            
         return {
             "connected": False,
             "error": str(e),
@@ -111,8 +121,28 @@ async def check_gmail_status(user_id: str):
 
 @router.delete("/disconnect/{user_id}")
 async def disconnect_gmail(user_id: str):
-    """Disconnect Gmail (remove stored tokens)."""
-    db.client.table("user_gmail_tokens").delete().eq("user_id", user_id).execute()
+    """Disconnect Gmail (Clean up both DB and Memory)."""
+    
+    # 1. Remove from Memory
+    if user_id in active_monitors:
+        del active_monitors[user_id]
+    
+    # 2. Remove from DB
+    try:
+        db.client.table("user_gmail_tokens").delete().eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"Error deleting from DB: {e}")
+
+    # 3. Notify Client via Socket
+    try:
+        await socketio_service.emit_gmail_update(
+            user_id,
+            "disconnected",
+            {"message": "Gmail monitoring stopped"}
+        )
+    except Exception as e:
+        print(f"Socket emit failed: {e}")
+
     return {"message": "Gmail disconnected"}
 
 
@@ -476,18 +506,51 @@ async def connect_gmail(
     user_id = request.user_id
     tokens = request.token
     
-    # Store in memory for monitoring
+    print(f"DEBUG: Connecting user {user_id}")
+
+    # 1. Store in memory immediately
     active_monitors[user_id] = tokens
     
-    # Try to get email from Google API using the access token
+    # 2. Fetch User Info from Google
     email_address = "unknown@gmail.com"
+    full_name = "Marathon User"
+    
     try:
+        # Get Email
         gmail = GmailService(tokens)
         email_address = gmail.email_address
+        
+        # Get Name (Ignore avatar since column doesn't exist)
+        user_info = requests.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo",
+            headers={"Authorization": f"Bearer {tokens.get('access_token')}"}
+        ).json()
+        
+        full_name = user_info.get("name", email_address.split('@')[0])
+        
     except Exception as e:
-        print(f"Warning: Could not retrieve email address: {e}")
-    
-    # Save tokens to database
+        print(f"Warning: Could not fetch Google user info: {e}")
+
+    # 3. Create/Update Profile (NAME ONLY)
+    try:
+        print(f"DEBUG: ensuring profile exists for {user_id}")
+        
+        # We only save 'full_name' to avoid 'column not found' errors
+        profile_data = {
+            "full_name": full_name
+            # "email": email_address  <-- Uncomment this if you added the email column
+        }
+        
+        db.get_or_create_profile(user_id, profile_data)
+        
+        # Update if it existed but name was generic
+        db.update_profile(user_id, profile_data)
+        
+    except Exception as e:
+        print(f"ERROR: Database profile creation failed: {e}")
+        # We continue even if this fails, though token saving might fail next
+
+    # 4. Save Tokens
     try:
         db.save_gmail_tokens(
             user_id=user_id,
@@ -499,10 +562,11 @@ async def connect_gmail(
                 "scopes": tokens.get("scopes", [])
             }
         )
+        print(f"DEBUG: Saved tokens to DB for {user_id}")
     except Exception as e:
-        print(f"Warning: Could not save Gmail tokens to database: {e}")
-    
-    # Emit Socket.IO event to notify client of successful connection
+        print(f"ERROR: Could not save Gmail tokens: {e}")
+
+    # 5. Notify via Socket.IO
     await socketio_service.emit_gmail_update(
         user_id,
         "connected",
@@ -511,23 +575,7 @@ async def connect_gmail(
     
     return {
         "success": True,
-        "message": "Gmail monitoring started",
-        "email": email_address
+        "message": "Gmail connected",
+        "email": email_address,
+        "user": full_name
     }
-
-@router.post("/disconnect")
-async def disconnect_gmail(request: DisconnectRequest):
-    """Disconnect Gmail monitoring."""
-    user_id = request.user_id
-    
-    if user_id in active_monitors:
-        del active_monitors[user_id]
-    
-    # Emit Socket.IO event to notify client of disconnection
-    await socketio_service.emit_gmail_update(
-        user_id,
-        "disconnected",
-        {"message": "Gmail monitoring stopped"}
-    )
-    
-    return {"success": True}

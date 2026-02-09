@@ -16,7 +16,7 @@ export const Sidebar = ({ currentView, setView, onLogout }: { currentView: ViewT
         { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
         { id: 'discovery', icon: Search, label: 'Job Discovery' },
         { id: 'manager', icon: Layers, label: 'Applications' },
-        { id: 'inbox', icon: Mail, label: 'Inbox', badge: 3 },
+        { id: 'inbox', icon: Mail, label: 'Inbox', badge: '' },
         { id: 'profile', icon: User, label: 'Profile' },
         { id: 'analytics', icon: BarChart2, label: 'Analytics' },
         { id: 'settings', icon: Settings, label: 'Settings' },

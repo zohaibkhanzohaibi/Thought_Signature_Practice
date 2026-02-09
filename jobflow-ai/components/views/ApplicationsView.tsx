@@ -233,7 +233,7 @@ const CampaignCard = ({
   const [expanded, setExpanded] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
 
-  const campaignJobs = jobs.filter(j => j.user_id === campaign.user_id);
+  const campaignJobs = jobs.filter(j => j.campaign_id === campaign.id);
 
   const jobsByStatus = STATUS_ORDER.reduce((acc, status) => {
     acc[status] = campaignJobs.filter(j => j.status === status);

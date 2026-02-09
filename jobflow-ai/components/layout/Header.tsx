@@ -1,21 +1,67 @@
-import React from 'react';
-import { Search, Sun, Moon, Bell } from 'lucide-react';
-import { MOCK_USER } from '../../constants';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Sun, Moon, Bell } from 'lucide-react';
+import io from 'socket.io-client';
 
 export const Header = ({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (d: boolean) => void }) => {
+    const [userName, setUserName] = useState("Guest");
+    // Default avatar
+    const [avatarUrl, setAvatarUrl] = useState("https://picsum.photos/id/1012/64/64");
+
+    // 1. Define the fetch function so we can reuse it
+    const fetchProfile = useCallback(async () => {
+        const userId = localStorage.getItem('marathon_user_id');
+        if (!userId) return;
+
+        try {
+            const response = await fetch(`http://localhost:8000/api/profiles/${userId}`);
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Update Name
+                if (data.full_name) {
+                    setUserName(data.full_name);
+                }
+
+                // Update Avatar
+                if (data.avatar_url) {
+                    setAvatarUrl(data.avatar_url);
+                } else {
+                    // Generate avatar from ID if none exists
+                    setAvatarUrl(`https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`);
+                }
+            }
+        } catch (error) {
+            console.error("Failed to fetch profile:", error);
+        }
+    }, []);
+
+    // 2. Setup Effect: Fetch on mount AND listen for socket updates
+    useEffect(() => {
+        // Initial fetch
+        fetchProfile();
+
+        const userId = localStorage.getItem('marathon_user_id');
+        if (!userId) return;
+
+        // Listen for real-time updates (like Gmail connecting)
+        const socket = io('http://localhost:8000', { query: { userId } });
+        
+        socket.on(`gmail_update_${userId}`, (data) => {
+            // If Gmail connects, re-fetch the profile to get the real name
+            if (data.type === 'connected') {
+                console.log("Gmail connected, refreshing profile...");
+                fetchProfile();
+            }
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, [fetchProfile]);
+
     return (
-        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between sticky top-0 z-10">
-            <div className="flex-1 max-w-xl">
-                <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input
-                        type="text"
-                        placeholder="Search jobs, applications, or companies..."
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-transparent rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-500 outline-none transition-all"
-                    />
-                </div>
-            </div>
-            <div className="flex items-center gap-4 ml-8">
+        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-end sticky top-0 z-10">
+            <div className="flex items-center gap-4">
                 <button onClick={() => setDarkMode(!darkMode)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full transition-colors">
                     {darkMode ? <Sun size={20} /> : <Moon size={20} />}
                 </button>
@@ -26,10 +72,15 @@ export const Header = ({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMo
                 <div className="h-8 w-px bg-slate-200 mx-2"></div>
                 <div className="flex items-center gap-3">
                     <div className="text-right hidden sm:block">
-                        <p className="text-sm font-bold text-slate-800 leading-none mb-1">{MOCK_USER.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{MOCK_USER.title}</p>
+                        <p className="text-sm font-bold text-slate-800 leading-none mb-1">
+                            {userName}
+                        </p>
                     </div>
-                    <img src="https://picsum.photos/id/1012/64/64" className="w-10 h-10 rounded-xl border-2 border-white shadow-sm" alt="User avatar" />
+                    <img 
+                        src={avatarUrl} 
+                        className="w-10 h-10 rounded-xl border-2 border-white shadow-sm bg-slate-100 object-cover" 
+                        alt="User avatar" 
+                    />
                 </div>
             </div>
         </header>

@@ -271,6 +271,22 @@ class MarathonDB:
     def __init__(self):
         self.client = supabase
     
+    def get_or_create_profile(self, user_id: str, data: Dict = None) -> Dict:
+        """Get existing profile or create new one with specific ID."""
+        # Check if exists by ID
+        existing = self.get_profile(user_id)
+        if existing:
+            return existing
+            
+        # If not, create with the specific ID provided
+        new_data = data or {}
+        new_data["id"] = user_id
+        # Ensure full_name is present (fallback)
+        if "full_name" not in new_data:
+             new_data["full_name"] = "Guest User"
+             
+        return self.create_profile(new_data)
+    
     # Profile operations
     def get_profile(self, user_id: str) -> Optional[Dict]:
         return get_profile(user_id)

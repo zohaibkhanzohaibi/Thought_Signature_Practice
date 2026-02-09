@@ -26,7 +26,7 @@ load_dotenv()
 
 # Import routers
 # Import routers
-from .routers import profile, campaigns, jobs, gmail, auth
+from .routers import profile, profiles, campaigns, jobs, gmail, auth
 from .services import socketio_service
 
 # Socket.IO setup for real-time communication (must be before lifespan)
@@ -130,6 +130,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include routers
 _fastapi_app.include_router(auth.router)
 _fastapi_app.include_router(profile.router)
+_fastapi_app.include_router(profiles.router)
 _fastapi_app.include_router(campaigns.router)
 _fastapi_app.include_router(jobs.router)
 _fastapi_app.include_router(gmail.router)
