@@ -1,10 +1,11 @@
-from rapidfuzz import fuzz
+from difflib import SequenceMatcher
 from datetime import datetime, timezone, timedelta
 """
 Campaigns Router - Job search campaign management endpoints.
 """
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Dict, List, Optional
+import os
 from datetime import datetime, timezone, timedelta
 
 from ..models.database import MarathonDB
@@ -329,18 +330,27 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
                 "job_url": job.get("source_url"),
                 "salary_range": "Unknown",
                 "posted_date": job.get("created_at"),
-                "job_description": job.get("description") or "",
+                "posted_date": job.get("created_at"),
+                "job_description": job.get("description") or job.get("job_description") or "",
                 "application_email": job.get("contact_email"), # CRITICAL
                 "match_score": 85, # Default high score for curated local jobs
                 "source": "public_db"
             }
 
-            # Fuzzy job title matching
+            # Fuzzy job title matching (using difflib)
             best_score = 0
             best_title = None
             j_title = mapped_job["job_title"].lower()
             for t in job_titles:
-                score = fuzz.token_set_ratio(t.lower(), j_title)
+                # Basic similarity ratio * 100 to match previous scale (0-100)
+                matcher = SequenceMatcher(None, t.lower(), j_title)
+                # usage of ratio() gives 0.0-1.0, so multiply by 100
+                score = matcher.ratio() * 100
+                # token_set_ratio is more forgiving, but ratio is a standard fallback
+                # If we want 'contains' logic to boost score:
+                if t.lower() in j_title:
+                   score = max(score, 90) # Boost if direct substring match
+                
                 if score > best_score:
                     best_score = score
                     best_title = t
@@ -373,16 +383,27 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
         print(f"   Matched {len(local_jobs)} local jobs.")
 
         # --- 2. Run AI Search ---
-        # Adjust max_jobs for AI (giving priority to local jobs, but still fetching some AI jobs if needed)
-        # If we have enough local jobs to fill the daily quota, we might skip AI or fetch fewer?
-        # Let's fetch AI jobs to fill the gap or at least try to find some fresh ones.
-        ai_jobs_count = max(0, max_jobs - len(local_jobs))
-        ai_jobs = []
-        if ai_jobs_count > 0:
-            ai_jobs = agent.search(query, num_jobs=ai_jobs_count)
+        # ALWAYS run AI search to use Google Grounding as requested, unless max_jobs is very small.
+        # We'll aim for at least 50% AI jobs or a minimum of 3.
+        ai_jobs_target = max(3, max_jobs // 2)
+        # But cap at max_jobs total if tight
+        ai_jobs_target = min(ai_jobs_target, max_jobs)
         
-        # Merge lists (Local first)
-        all_jobs = local_jobs + ai_jobs
+        # Or simply: fetch a batch of fresh jobs to ensure grounding is used.
+        # Let's fetch 'ai_jobs_target' jobs.
+        
+        print(f"🤖 Searching AI for {ai_jobs_target} fresh jobs via Google Grounding...")
+        ai_jobs = []
+        try:
+             ai_jobs = agent.search(query, num_jobs=ai_jobs_target)
+             print(f"   AI found {len(ai_jobs)} jobs.")
+        except Exception as e:
+            print(f"❌ AI Search failed: {e}")
+        
+        # Merge lists (Local + AI)
+        # We prioritize AI jobs if they are fresh? Or mix them?
+        # Let's put AI jobs first to ensure they are seen if we truncate.
+        all_jobs = ai_jobs + local_jobs
         
         # --- 3. Deduplicate ---
         existing_keys = db.get_applied_job_keys(state["user_id"])
@@ -407,46 +428,117 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
 
         for job in jobs:
             # Create job application as 'scouted'
-            job_app = db.create_job_application(state["user_id"], job, status="scouted")
+            job_app = db.create_job_application(state["user_id"], job, status="scouted", campaign_id=campaign_id)
             job_id = job_app["id"] if job_app else None
-            if gmail_tokens and job_id:
+            job_id = job_app["id"] if job_app else None
+            
+            # Start tailoring process if job was created
+            if job_id:
                 try:
-                    # Tailor resume and cover letter
+                    # Initialize tailoring service with profile
                     from ..services.resume_tailor import ResumeTailorService
-                    tailor_service = ResumeTailorService()
+                    
+                    # Get JD and Profile text
                     jd = job_app.get("job_description") or job_app.get("jd_analysis", {}).get("raw_jd", "")
-                    profile_text = profile.get("raw_resume_text", "")
-                    if not profile_text and profile.get("resume_data"):
-                        profile_text = str(profile["resume_data"])
-                    if jd and profile_text:
-                        jd_analysis = await tailor_service.analyze_job_description(jd)
-                        tailored = await tailor_service.tailor_resume_for_job(profile_text, jd)
-                        cover_email = await tailor_service.generate_cover_email(profile_text, jd, profile.get("full_name", "Applicant"))
+                    
+                    # Fallback if JD is empty (to unblock resume generation)
+                    if not jd:
+                        jd = f"Role: {job_app.get('job_title', 'Unknown Role')}\nCompany: {job_app.get('company_name', 'Unknown Company')}\nPlease refer to the job URL for full details."
+                        # Optionally update the DB with this placeholder so it persists
+                        db.update_job_application(job_id, {"job_description": jd})
+
+                    # Build profile text from available fields if resume is missing
+                    profile_text = ""
+                    if profile.get("parsed_resume"):
+                        profile_text = str(profile["parsed_resume"])
+                    elif profile.get("summary"):
+                        profile_text = profile["summary"]
+                    
+                    if len(profile_text) < 100:
+                        meta_parts = []
+                        if profile.get("skills"):
+                            meta_parts.append(f"Skills: {', '.join(profile['skills'])}")
+                        if profile.get("experience_years"):
+                            meta_parts.append(f"Experience: {profile['experience_years']} years")
+                        if profile.get("target_roles"):
+                            meta_parts.append(f"Target Roles: {', '.join(profile['target_roles'])}")
+                        profile_text = f"{profile_text}\n\nCandidate Metadata:\n" + "\n".join(meta_parts)
+
+                    # Inject constructed text into profile for service
+                    if not profile.get("parsed_resume"):
+                        profile["parsed_resume"] = {"summary": profile_text}
+
+                    tailor_service = ResumeTailorService(profile=profile)
+
+                    # Only proceed if we have both JD and Profile text
+                    if jd and len(profile_text.strip()) > 10:
+                        # 1. Analyze and Tailor
+                        jd_analysis = await tailor_service.analyze_jd(jd)
+                        _, tailored_resume, _ = await tailor_service.tailor(jd)
+                        cover_email = await tailor_service.generate_email(jd_analysis, tailored_resume)
+                        
                         db.update_job_application(job_id, {
                             "status": "tailored",
                             "jd_analysis": jd_analysis,
-                            "tailored_resume": tailored.get("final_resume"),
+                            "tailored_resume": tailored_resume,
                             "cover_letter": cover_email
                         })
-                        # Generate PDF
+                        
+                        # 2. Generate PDF
                         from ..services.pdf_renderer import generate_resume_pdf, convert_tailored_to_pdf_data
-                        pdf_data = convert_tailored_to_pdf_data(tailored.get("final_resume"), profile)
-                        output_path = f"resumes/{state['user_id']}/resume_job_{job_id}.pdf"
+                        pdf_data = convert_tailored_to_pdf_data(tailored_resume, profile)
+                        
+                        # Ensure directory exists
+                        output_dir = f"resumes/{state['user_id']}"
+                        os.makedirs(output_dir, exist_ok=True)
+                        
+                        output_path = f"{output_dir}/resume_job_{job_id}.pdf"
                         result_path = generate_resume_pdf(pdf_data, output_path)
                         db.update_job_application(job_id, {"resume_pdf_path": result_path})
-                        # Create Gmail draft
-                        from ..services.gmail_service import GmailService
-                        gmail = GmailService(gmail_tokens)
+                        
+                        # 3. Create Gmail draft (Strictly Conditional)
                         to_email = job_app.get("application_email") or job_app.get("company_email")
-                        subject = f"Application for {job_app.get('job_title', '')} at {job_app.get('company_name', '')} - {profile.get('full_name', '')}"
-                        body = cover_email
-                        draft_id = gmail.create_draft(to=to_email, subject=subject, body=body, attachment_path=result_path)
-                        db.update_job_application(job_id, {"gmail_draft_id": draft_id, "status": "drafted"})
-                        jobs_applied += 1
+                        auto_apply = config.get("auto_apply", False)
+                        
+                        print(f"DEBUG: Job {job_id} - to_email: {to_email}, auto_apply: {auto_apply}, has_tokens: {gmail_tokens is not None}")
+                        
+                        if auto_apply and to_email and gmail_tokens:
+                            from ..services.gmail_service import GmailService
+                            gmail = GmailService(gmail_tokens)
+                            subject = f"Application for {job_app.get('job_title', '')} at {job_app.get('company_name', '')} - {profile.get('full_name', '')}"
+                            body = cover_email
+                            
+                            try:
+                                draft_id = gmail.create_draft(to=to_email, subject=subject, body=body, attachment_path=result_path)
+                                db.update_job_application(job_id, {"gmail_draft_id": draft_id, "status": "drafted"})
+                                jobs_applied += 1
+                                print(f"📧 Draft created for {job_id}")
+                                
+                                # Save updated tokens to keep session alive during long runs
+                                db.save_gmail_tokens(
+                                    user_id=state["user_id"],
+                                    email=gmail.email_address,
+                                    tokens=gmail.get_updated_tokens()
+                                )
+                            except Exception as e:
+                                print(f"⚠️ Failed to create draft: {e}")
+                            
+                        elif not auto_apply:
+                            print(f"ℹ️ Auto-apply disabled for {job_id}. Skipping draft.")
+                            jobs_applied += 1
+                        elif not to_email:
+                            print(f"ℹ️ Job {job_id} has no email address. Skipping draft.")
+                            jobs_applied += 1
+                        elif not gmail_tokens:
+                            print(f"⚠️ Gmail not connected for {state['user_id']}. Skipping draft.")
+                            jobs_applied += 1
+                    else:
+                        reason = "Missing JD" if not jd else "Missing Resume Text in Profile"
+                        print(f"⚠️ Skipping automation for job {job_id}: {reason}")
+
                 except Exception as e:
-                    print(f"❌ Failed to auto-apply for job {job_id}: {e}")
+                    print(f"❌ Failed to process job {job_id}: {e}")
                     # Leave as scouted if any step fails
-            # If no Gmail, leave as scouted
 
         # Update campaign run
         db.update_campaign_run(

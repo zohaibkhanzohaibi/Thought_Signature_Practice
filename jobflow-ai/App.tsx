@@ -77,7 +77,7 @@ const App = () => {
           {currentView === 'discovery' && <JobDiscoveryView onApply={(j) => setIsApplying(j)} />}
           {currentView === 'manager' && <ApplicationsView userId={userId} />}
           {currentView === 'profile' && <ProfileView userId={userId} />}
-          {currentView === 'inbox' && <InboxView />}
+          {currentView === 'inbox' && <InboxView userId={userId} />}
 
           {/* Placeholders for unimplemented views */}
           {currentView === 'analytics' && (

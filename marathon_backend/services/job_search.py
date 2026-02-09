@@ -133,7 +133,9 @@ Strictly adhere to this specific JSON structure for each job object:
     "salary_range": "e.g. $100k-$120k or 'Competitive' if unknown",
     "posted_date": "e.g. 2 days ago",
     "job_description": "2-3 sentence summary of the role",
-    "match_score": 85
+    "match_score": 85,
+    "application_email": "Specific email for applications if found, otherwise null",
+    "company_domain": "e.g. company.com"
   }}
 ]
 
@@ -142,6 +144,8 @@ IMPORTANT:
 - "match_score" must be an integer 0-100.
 - Return ONLY the JSON array. No markdown formatting or explanation. 
 - Ensure valid URLs.
+- If you find an email address (e.g. careers@company.com) in the job posting or about page, include it in "application_email".
+- "company_domain" is very helpful for locating the company's official site.
 """
 
     # Call OpenRouter-proxied Gemini via our helper. We wrap the call so

@@ -97,24 +97,29 @@ def get_all_active_campaigns() -> List[Dict]:
 # JOB APPLICATION OPERATIONS
 # ============================================
 
-def create_job_application(user_id: str, job: Dict, status: str = "scouted") -> Dict:
+def create_job_application(user_id: str, job: Dict, status: str = "scouted", campaign_id: str = None) -> Dict:
     """Create a new job application."""
     job_title = job.get("job_title") or job.get("title") or "Unknown"
     data = {
         "user_id": user_id,
+        "campaign_id": campaign_id,
         "job_title": job_title,
         "company_name": job.get("company"),
         "source_url": job.get("url"),
         "location": job.get("location"),
         "posted_date": job.get("posted_date"),
         "match_score": job.get("match_score", 0),
-        "job_description": job.get("description"),
+        "job_description": job.get("description") or job.get("job_description"),
         "status": status,
         "replies_log": [{
             "action": status,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }]
     }
+    # Filter out None values to let DB defaults handle them if necessary, 
+    # though here we want explicit None if key exists in table but is optional.
+    # Supabase/Postgres usually handles missing keys as null if nullable.
+    
     res = supabase.table("job_applications").insert(data).execute()
     return res.data[0] if res.data else None
 
@@ -330,8 +335,8 @@ class MarathonDB:
     def get_applied_job_keys(self, user_id: str) -> set:
         return get_applied_job_keys(user_id)
     
-    def create_job_application(self, user_id: str, job: Dict, status: str = "scouted") -> Dict:
-        return create_job_application(user_id, job, status)
+    def create_job_application(self, user_id: str, job: Dict, status: str = "scouted", campaign_id: str = None) -> Dict:
+        return create_job_application(user_id, job, status, campaign_id)
     
     def update_job_application(self, job_id: int, data: Dict) -> Dict:
         return update_job_application(str(job_id), data)
