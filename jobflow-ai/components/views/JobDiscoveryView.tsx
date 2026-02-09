@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Sparkles, Briefcase, MapPin, Globe, Mail, ArrowRight, Loader2 } from 'lucide-react';
 // 👇 Import your existing auth service
-import { authService } from '../../services/auth'; 
+import { authService } from '../../services/auth';
 
 interface PublicJob {
     id: number;
@@ -21,15 +21,15 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
     const [parsedJob, setParsedJob] = useState<Partial<PublicJob> | null>(null);
     const [publicJobs, setPublicJobs] = useState<PublicJob[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    
+
     // Auth State
     const [token, setToken] = useState<string | null>(null);
 
     // 1. Initialize: Get Token from your authService
     useEffect(() => {
         // use authService.getToken() which looks for "token"
-        const storedToken = authService.getToken(); 
-        
+        const storedToken = authService.getToken();
+
         if (storedToken) {
             setToken(storedToken);
             console.log("✅ User Logged In");
@@ -64,7 +64,7 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
     // 2. Handle Text Analysis
     const handleAnalyze = async () => {
         if (!rawText) return;
-        
+
         if (!token) {
             alert("Please log in to use AI analysis.");
             return;
@@ -75,11 +75,11 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
             const res = await fetch('http://localhost:8000/api/jobs/parse-raw', {
                 method: 'POST',
                 headers: getAuthHeaders(), // Sends "Bearer <token>"
-                body: JSON.stringify({ raw_text: rawText }) 
+                body: JSON.stringify({ raw_text: rawText })
             });
-            
+
             if (!res.ok) throw new Error("Analysis failed");
-            
+
             const data = await res.json();
             setParsedJob(data);
         } catch (error) {
@@ -99,14 +99,14 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
                 title: parsedJob.title,
                 company: parsedJob.company,
                 location: parsedJob.location || "Remote",
-                description: parsedJob.description || parsedJob.summary || "", 
+                description: parsedJob.description || parsedJob.summary || "",
                 contact_email: parsedJob.contact_email,
                 source_url: parsedJob.source_url
             };
 
             const response = await fetch('http://localhost:8000/api/jobs/public', {
                 method: 'POST',
-                headers: getAuthHeaders(), 
+                headers: getAuthHeaders(),
                 body: JSON.stringify(payload)
             });
 
@@ -137,12 +137,12 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
         try {
             const res = await fetch(`http://localhost:8000/api/jobs/public/${jobId}/save-to-profile`, {
                 method: 'POST',
-                headers: getAuthHeaders() 
+                headers: getAuthHeaders()
             });
-            
+
             if (res.ok) {
                 const data = await res.json();
-                onApply(data); 
+                onApply(data);
             } else {
                 alert("Failed to create application draft.");
             }
@@ -159,15 +159,14 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
                     <h2 className="text-2xl font-bold text-slate-800">Community Job Board</h2>
                     <p className="text-slate-500">Discover jobs found by the community or add your own.</p>
                 </div>
-                <button 
+                <button
                     onClick={() => setMode(mode === 'feed' ? 'create' : 'feed')}
-                    className={`px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all ${
-                        mode === 'feed' 
-                        ? 'bg-slate-900 text-white hover:bg-slate-800' 
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                    }`}
+                    className={`px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all ${mode === 'feed'
+                            ? 'bg-slate-900 text-white hover:bg-slate-800'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
                 >
-                    {mode === 'feed' ? <><Plus size={20}/> Add Manual Job</> : 'Back to Feed'}
+                    {mode === 'feed' ? <><Plus size={20} /> Add Manual Job</> : 'Back to Feed'}
                 </button>
             </div>
 
@@ -178,13 +177,13 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
                         <label className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">
                             Paste Job Post (LinkedIn, Email, etc.)
                         </label>
-                        <textarea 
+                        <textarea
                             value={rawText}
                             onChange={(e) => setRawText(e.target.value)}
                             placeholder="Paste the entire post here..."
                             className="flex-1 w-full bg-slate-50 border-transparent rounded-2xl p-6 text-slate-600 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none resize-none transition-all mb-4"
                         />
-                        <button 
+                        <button
                             onClick={handleAnalyze}
                             disabled={isAnalyzing || !rawText}
                             className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl flex justify-center items-center gap-2 transition-all disabled:opacity-50"
@@ -211,10 +210,10 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
                                 {(parsedJob.contact_email || parsedJob.source_url) && (
                                     <div className="flex gap-2 flex-wrap">
                                         {parsedJob.contact_email && (
-                                            <span className="px-3 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-bold flex items-center gap-1"><Mail size={12}/> Email Found</span>
+                                            <span className="px-3 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-bold flex items-center gap-1"><Mail size={12} /> Email Found</span>
                                         )}
                                         {parsedJob.source_url && (
-                                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1"><Globe size={12}/> URL Found</span>
+                                            <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1"><Globe size={12} /> URL Found</span>
                                         )}
                                     </div>
                                 )}
@@ -242,9 +241,9 @@ export const JobDiscoveryView = ({ onApply }: { onApply: (job: any) => void }) =
                                         <div className="flex-1 mr-4">
                                             <h3 className="text-xl font-bold text-slate-800">{job.title}</h3>
                                             <div className="flex items-center gap-4 mt-2 text-slate-500 font-medium text-sm flex-wrap">
-                                                <span className="flex items-center gap-1"><Briefcase size={14}/> {job.company}</span>
-                                                <span className="flex items-center gap-1"><MapPin size={14}/> {job.location || 'Remote'}</span>
-                                                {job.contact_email && <span className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md"><Mail size={14}/> {job.contact_email}</span>}
+                                                <span className="flex items-center gap-1"><Briefcase size={14} /> {job.company}</span>
+                                                <span className="flex items-center gap-1"><MapPin size={14} /> {job.location || 'Remote'}</span>
+                                                {job.contact_email && <span className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md"><Mail size={14} /> {job.contact_email}</span>}
                                             </div>
                                             <p className="mt-4 text-slate-600 line-clamp-2 text-sm">{job.description}</p>
                                         </div>

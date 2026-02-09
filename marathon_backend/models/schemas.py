@@ -24,6 +24,11 @@ class JobStatus(str, Enum):
     WITHDRAWN = "withdrawn"
 
 
+class JobManualExtractRequest(BaseModel):
+    raw_text: str
+
+
+
 class ThreadStatus(str, Enum):
     PENDING = "pending"
     NEEDS_REPLY = "needs_reply"
@@ -161,9 +166,9 @@ class JobResponse(BaseModel):
     id: str
     user_id: str
     job_title: str
-    company_name: str
+    company: str
     location: Optional[str] = None
-    source_url: Optional[str] = None
+    job_url: Optional[str] = None
     job_description: Optional[str] = None
     posted_date: Optional[str] = None
     match_score: Optional[int] = 0

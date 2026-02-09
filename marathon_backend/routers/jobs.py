@@ -6,13 +6,21 @@ from typing import Dict, List, Optional
 from datetime import datetime, timezone
 
 from ..models.database import MarathonDB
-from ..models.schemas import JobResponse, JobApplicationUpdate, GmailDraftCreate
+from ..models.schemas import JobResponse, JobApplicationUpdate, GmailDraftCreate, JobManualExtractRequest
 from ..services.resume_tailor import ResumeTailorService
 from ..services.gmail_service import GmailService
 from ..services.pdf_renderer import generate_resume_pdf, convert_tailored_to_pdf_data
 from ..models.schemas import RawJobPost, PublicJobCreate, PublicJobResponse
 from ..services.job_parser import parse_job_text
 from .auth import get_current_user
+from ..services.job_search import search_jobs_with_ai, get_job_key
+from pydantic import BaseModel
+
+class JobSearchRequest(BaseModel):
+    query: str
+    location: str = "Remote"
+    num_jobs: int = 5
+    days_limit: int = 7
 
 router = APIRouter(prefix="/api/jobs", tags=["Jobs"])
 db = MarathonDB()
@@ -39,7 +47,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}")
-async def get_job(job_id: int):
+async def get_job(job_id: str):
     """Get job application details."""
     job = db.get_job_application(job_id)
     if not job:
@@ -48,7 +56,7 @@ async def get_job(job_id: int):
 
 
 @router.patch("/{job_id}", response_model=JobResponse)
-async def update_job(job_id: int, update: JobApplicationUpdate):
+async def update_job(job_id: str, update: JobApplicationUpdate):
     """Update job application status and details."""
     job = db.get_job_application(job_id)
     if not job:
@@ -144,7 +152,7 @@ async def tailor_resume_for_job(job_id: str, background_tasks: BackgroundTasks =
 
 
 @router.post("/{job_id}/generate-pdf")
-async def generate_pdf(job_id: int):
+async def generate_pdf(job_id: str):
     """
     Generate a PDF resume from tailored content.
     """
@@ -185,19 +193,18 @@ async def generate_pdf(job_id: int):
             "resume_pdf_path": result_path
         }).eq("id", job_id).execute()
         
-        return {
-            "message": "PDF generated",
-            "path": result_path
-        }
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            path=result_path, 
+            filename=f"Resume_{job.get('company', 'Company')}_{job.get('job_title', 'Job')}.pdf",
+            media_type='application/pdf'
+        )
     except Exception as e:
-        return {
-            "message": f"PDF generation failed: {str(e)}",
-            "fallback": "HTML file may have been generated instead"
-        }
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
 
 @router.post("/{job_id}/create-draft")
-async def create_gmail_draft(job_id: int, draft: GmailDraftCreate = None):
+async def create_gmail_draft(job_id: str, draft: GmailDraftCreate = None):
     """
     Create a Gmail draft for this job application.
     Uses tailored cover letter as email body.
@@ -276,7 +283,7 @@ async def create_gmail_draft(job_id: int, draft: GmailDraftCreate = None):
 
 
 @router.post("/{job_id}/send")
-async def send_application(job_id: int):
+async def send_application(job_id: str):
     """
     Send the Gmail draft for this job.
     """
@@ -417,3 +424,75 @@ async def save_public_job_to_profile(
     
     res = db.client.table("job_applications").insert(new_app).execute()
     return res.data[0]
+
+
+@router.post("/search")
+async def search_jobs(request: JobSearchRequest, user_id: str):
+    """
+    Smart Job Search:
+    1. Search Google for new jobs (grounding).
+    2. Save new findings to DB.
+    3. Return mix of new + existing jobs from last 7 days.
+    """
+    profile = db.get_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="User profile not found")
+
+    # 1. Search for new jobs
+    new_jobs, signature = search_jobs_with_ai(
+        query=request.query,
+        profile=profile,
+        location=request.location,
+        num_jobs=request.num_jobs
+    )
+
+    # 2. Save new unique jobs
+    saved_jobs = []
+    for job in new_jobs:
+        # Check if exists
+        existing = db.client.table("job_applications").select("id").eq("user_id", user_id).eq("job_url", job.get("job_url")).execute()
+        
+        if not existing.data:
+            # Insert new
+            job_data = {
+                "user_id": user_id,
+                "company": job.get("company"),
+                "job_title": job.get("job_title"),
+                "job_url": job.get("job_url"),
+                "location": job.get("location"),
+                "salary_range": job.get("salary_range"),
+                "posted_date": job.get("posted_date"),
+                "job_description": job.get("job_description"),
+                "match_score": job.get("match_score"),
+                "status": "scouted", # Using 'scouted' as 'discovered'
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            res = db.client.table("job_applications").insert(job_data).execute()
+            if res.data:
+                saved_jobs.append(res.data[0])
+        else:
+             # Already exists, maybe update? For now just skip
+             pass
+
+    # 3. Fetch all relevant jobs (New + Existing recent)
+    # Calculate cutoff date
+    cutoff = datetime.now(timezone.utc).timestamp() - (request.days_limit * 86400)
+    cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+
+    # Query DB for jobs matching criteria
+    # internal database search is simple for now, can be improved with full text search later
+    
+    # We will return the newly found jobs + any existing 'scouted' jobs for this query
+    # A simple way is to just return what we have in DB that matches the 'scouted' status and recent time
+    # ideally we filter by query too, but strict SQL matching on text is hard without FTS.
+    # For now, let's return all 'scouted' jobs from last 7 days to populate the view
+    
+    recent_jobs = db.client.table("job_applications")\
+        .select("*")\
+        .eq("user_id", user_id)\
+        .eq("status", "scouted")\
+        .gte("created_at", cutoff_iso)\
+        .order("created_at", desc=True)\
+        .execute()
+        
+    return recent_jobs.data

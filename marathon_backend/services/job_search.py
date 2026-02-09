@@ -125,26 +125,27 @@ USER PROFILE:
 
 {exclude_text}
 
-Search Google for active job listings matching these criteria. Return ONLY valid JSON array with {num_jobs} jobs:
+Search Google for active job listings matching these criteria. Return ONLY valid JSON array with {num_jobs} jobs.
+Strictly adhere to this specific JSON structure for each job object:
 
 [
   {{
-    "title": "Exact Job Title from listing",
     "company": "Company Name",
-    "location": "City, Country or Remote",
-    "url": "Actual job posting URL",
-    "match_score": 85,
-    "description": "Brief 1-2 sentence description",
-    "posted_date": "Today/Yesterday/2 days ago/etc"
+    "job_title": "Exact Job Title",
+    "location": "City, Country",
+    "job_url": "Direct URL to job posting",
+    "salary_range": "e.g. $100k-$120k or 'Competitive' if unknown",
+    "posted_date": "e.g. 2 days ago",
+    "job_description": "2-3 sentence summary of the role",
+    "match_score": 85
   }}
 ]
 
 IMPORTANT:
-- Return REAL jobs from actual job boards (LinkedIn, Indeed, Glassdoor, company sites)
-- Include actual URLs that work
-- posted_date should be relative (Today, Yesterday, 3 days ago)
-- match_score 0-100 based on profile fit
-- Focus on {location} or Remote positions
+- "salary_range" is required (guess based on market if not listed, but prefer actual data).
+- "match_score" must be an integer 0-100.
+- Return ONLY the JSON array. No markdown formatting or explanation. 
+- Ensure valid URLs.
 """
 
     response = call_with_retry(lambda: client.models.generate_content(

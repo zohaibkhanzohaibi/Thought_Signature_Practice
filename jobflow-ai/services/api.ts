@@ -81,16 +81,16 @@ export interface SkillsSummary {
 // CAMPAIGN TYPES
 // ============================================
 
-export type JobStatus = 
-  | 'scouted' 
-  | 'analyzing' 
-  | 'tailored' 
-  | 'drafted' 
-  | 'sent' 
-  | 'replied' 
-  | 'interview' 
-  | 'offer' 
-  | 'rejected' 
+export type JobStatus =
+  | 'scouted'
+  | 'analyzing'
+  | 'tailored'
+  | 'drafted'
+  | 'sent'
+  | 'replied'
+  | 'interview'
+  | 'offer'
+  | 'rejected'
   | 'withdrawn';
 
 export interface CampaignConfig {
@@ -158,9 +158,9 @@ export interface JobApplication {
   id: number;
   user_id: string;
   job_title: string;
-  company_name: string;
+  company: string;
   location?: string;
-  source_url?: string;
+  job_url?: string;
   job_description?: string;
   posted_date?: string;
   match_score?: number;
@@ -182,17 +182,17 @@ export interface JobApplication {
 // ============================================
 
 class ApiService {
-    async markJobAsApplied(jobId: number): Promise<any> {
-      return this.request<any>(`/jobs/${jobId}/mark-applied`, {
-        method: 'POST',
-      });
-    }
+  async markJobAsApplied(jobId: number): Promise<any> {
+    return this.request<any>(`/jobs/${jobId}/mark-applied`, {
+      method: 'POST',
+    });
+  }
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${API_BASE}${endpoint}`;
-    
+
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -317,6 +317,20 @@ class ApiService {
     return this.request<JobApplication[]>(`/jobs/user/${userId}${params}`);
   }
 
+  async searchJobs(userId: string, query: string, params: { location?: string, num_jobs?: number, days_limit?: number } = {}): Promise<any[]> {
+    return this.request<any[]>(`/jobs/search?user_id=${userId}`, {
+      method: 'POST',
+      body: JSON.stringify({ query, ...params }),
+    });
+  }
+
+  async manualExtract(userId: string, rawText: string): Promise<any> {
+    return this.request<any>(`/jobs/manual-extract?user_id=${userId}`, {
+      method: 'POST',
+      body: JSON.stringify({ raw_text: rawText }),
+    });
+  }
+
   async getJob(jobId: number): Promise<JobApplication> {
     return this.request<JobApplication>(`/jobs/${jobId}`);
   }
@@ -334,10 +348,28 @@ class ApiService {
     });
   }
 
-  async generatePdf(jobId: number): Promise<any> {
-    return this.request<any>(`/jobs/${jobId}/generate-pdf`, {
+  async generatePdf(jobId: number): Promise<void> {
+    const response = await fetch(`${API_BASE}/jobs/${jobId}/generate-pdf`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
     });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Download failed' }));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `resume_job_${jobId}.pdf`; // Fallback name, browser might use header
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   }
 
   // ============================================

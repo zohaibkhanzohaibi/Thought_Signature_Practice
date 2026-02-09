@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ChevronDown, 
-  ChevronRight, 
-  Play, 
-  Pause, 
-  Plus, 
-  RefreshCw, 
+import {
+  ChevronDown,
+  ChevronRight,
+  Play,
+  Pause,
+  Plus,
+  RefreshCw,
   Briefcase,
   MapPin,
   Calendar,
@@ -82,11 +82,14 @@ const JobRow = ({ job }: { job: JobApplication }) => {
       return;
     }
     try {
-      await api.tailorResume(job.id);
-      const pdfResult = await api.generatePdf(job.id);
-      const pdfPath = pdfResult?.path || `/api/jobs/${job.id}/resume-pdf`;
-      window.open(pdfPath, '_blank');
+      // Only tailor if not already done or empty
+      if (job.status === 'scouted' && (!job.tailored_resume || Object.keys(job.tailored_resume).length === 0)) {
+        // Show loading state or toast here? For now just await.
+        await api.tailorResume(job.id);
+      }
+      await api.generatePdf(job.id);
     } catch (err) {
+      console.error(err);
       alert('Failed to tailor or download resume PDF.');
     }
   };
@@ -107,7 +110,7 @@ const JobRow = ({ job }: { job: JobApplication }) => {
 
   return (
     <div className="bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
-      <div 
+      <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-slate-100/50 transition-colors"
         onClick={() => setShowDetails(!showDetails)}
       >
@@ -118,7 +121,7 @@ const JobRow = ({ job }: { job: JobApplication }) => {
           <div>
             <h4 className="font-bold text-slate-700">{job.job_title}</h4>
             <div className="flex items-center gap-2 text-sm text-slate-500">
-              <span>{job.company_name}</span>
+              <span>{job.company}</span>
               <span>•</span>
               <span className="flex items-center gap-1">
                 <MapPin size={12} /> {job.location}
@@ -134,10 +137,10 @@ const JobRow = ({ job }: { job: JobApplication }) => {
               <div className="text-[10px] text-slate-400 uppercase">Match</div>
             </div>
           )}
-          {job.source_url && (
-            <a 
-              href={job.source_url} 
-              target="_blank" 
+          {job.job_url && (
+            <a
+              href={job.job_url}
+              target="_blank"
               rel="noopener noreferrer"
               className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
               onClick={e => e.stopPropagation()}
@@ -148,7 +151,7 @@ const JobRow = ({ job }: { job: JobApplication }) => {
           <ChevronRight size={16} className={`text-slate-400 transition-transform ${showDetails ? 'rotate-90' : ''}`} />
         </div>
       </div>
-      
+
       {showDetails && (
         <div className="border-t border-slate-100 p-4 bg-white space-y-3">
           {job.job_description && (
@@ -157,9 +160,9 @@ const JobRow = ({ job }: { job: JobApplication }) => {
               <p className="text-sm text-slate-600 line-clamp-3">{job.job_description}</p>
             </div>
           )}
-          
+
           <div className="flex items-center gap-2 pt-2">
-            {job.tailored_resume && (
+            {job.tailored_resume && Object.keys(job.tailored_resume).length > 0 && (
               <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-1 rounded-lg">
                 <FileText size={12} /> Resume Tailored
               </span>
@@ -175,7 +178,7 @@ const JobRow = ({ job }: { job: JobApplication }) => {
               </span>
             )}
           </div>
-          
+
           {/* Actions for scouted jobs */}
           {job.status === 'scouted' && !job.cover_email && (
             <div className="flex items-center gap-3 mt-3">
@@ -183,7 +186,7 @@ const JobRow = ({ job }: { job: JobApplication }) => {
                 className="px-4 py-2 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 text-sm"
                 onClick={handleDownloadResume}
               >
-                Download Tailored Resume
+                Tailor & Download Resume
               </button>
               <button
                 className="px-4 py-2 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 text-sm"
@@ -193,21 +196,34 @@ const JobRow = ({ job }: { job: JobApplication }) => {
               </button>
             </div>
           )}
+
+          {/* Download button for already tailored jobs */}
+          {job.status !== 'scouted' && (job.tailored_resume || job.resume_pdf_path) && (
+            <div className="mt-3">
+              <button
+                className="px-4 py-2 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 text-sm border border-slate-200 flex items-center gap-2"
+                onClick={handleDownloadResume}
+              >
+                <FileText size={16} />
+                Download Resume PDF
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 };
 
-const CampaignCard = ({ 
-  campaign, 
-  jobs, 
+const CampaignCard = ({
+  campaign,
+  jobs,
   runs,
-  onRun, 
+  onRun,
   onPauseResume,
-  isRunning 
-}: { 
-  campaign: Campaign; 
+  isRunning
+}: {
+  campaign: Campaign;
   jobs: JobApplication[];
   runs: CampaignRun[];
   onRun: () => void;
@@ -216,9 +232,9 @@ const CampaignCard = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
-  
+
   const campaignJobs = jobs.filter(j => j.user_id === campaign.user_id);
-  
+
   const jobsByStatus = STATUS_ORDER.reduce((acc, status) => {
     acc[status] = campaignJobs.filter(j => j.status === status);
     return acc;
@@ -226,7 +242,7 @@ const CampaignCard = ({
 
   const isPaused = campaign.status === 'paused';
   const isCompleted = campaign.status === 'completed';
-  
+
   // Day tracking
   const totalDays = campaign.config.total_days || 7;
   const currentDay = campaign.current_day || 1;
@@ -237,7 +253,7 @@ const CampaignCard = ({
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isCompleted ? 'border-slate-200 opacity-75' : 'border-slate-100'}`}>
       {/* Campaign Header */}
-      <div 
+      <div
         className="p-6 cursor-pointer hover:bg-slate-50/50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
@@ -249,13 +265,12 @@ const CampaignCard = ({
             <div>
               <div className="flex items-center gap-3">
                 <h3 className="text-lg font-bold text-slate-800">{campaign.name}</h3>
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                  isCompleted
-                    ? 'bg-slate-100 text-slate-500 border border-slate-200'
-                    : isPaused 
-                      ? 'bg-amber-100 text-amber-700 border border-amber-200' 
-                      : 'bg-green-100 text-green-700 border border-green-200'
-                }`}>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${isCompleted
+                  ? 'bg-slate-100 text-slate-500 border border-slate-200'
+                  : isPaused
+                    ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                    : 'bg-green-100 text-green-700 border border-green-200'
+                  }`}>
                   {campaign.status}
                 </span>
               </div>
@@ -277,51 +292,49 @@ const CampaignCard = ({
               </div>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
             {/* Day Progress */}
             <div className="flex flex-col items-center bg-blue-50 rounded-xl px-4 py-2">
               <span className="text-xs font-bold text-blue-400">Days Left</span>
               <span className="text-lg font-bold text-blue-700">{daysRemaining}</span>
             </div>
-            
+
             {/* Jobs Today */}
             <div className="flex flex-col items-center bg-slate-50 rounded-xl px-4 py-2">
               <span className="text-xs font-bold text-slate-400">Today</span>
               <span className="text-sm font-bold text-slate-700">{jobsAppliedToday}/{jobsPerDay}</span>
             </div>
-            
+
             {/* Stats Summary */}
             <div className="flex flex-col items-center bg-slate-50 rounded-xl px-4 py-2">
               <span className="text-xs font-bold text-slate-400">Total Jobs</span>
               <span className="text-sm font-bold text-slate-700">{campaign.stats?.total_jobs || 0}</span>
             </div>
-            
+
             {/* Run Button */}
             <button
               onClick={onRun}
               disabled={isRunning || isPaused || isCompleted}
-              className={`p-2.5 rounded-xl transition-all ${
-                isRunning 
+              className={`p-2.5 rounded-xl transition-all ${isRunning
+                ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                : (isPaused || isCompleted)
                   ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  : (isPaused || isCompleted)
-                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                    : 'bg-green-50 text-green-600 hover:bg-green-100'
-              }`}
+                  : 'bg-green-50 text-green-600 hover:bg-green-100'
+                }`}
               title={isCompleted ? 'Campaign completed' : isPaused ? 'Resume campaign to run' : 'Run campaign now'}
             >
               {isRunning ? <RefreshCw size={18} className="animate-spin" /> : <Play size={18} />}
             </button>
-            
+
             {/* Pause/Resume Button - hidden for completed */}
             {!isCompleted && (
               <button
                 onClick={onPauseResume}
-                className={`p-2.5 rounded-xl transition-all ${
-                  isPaused 
-                    ? 'bg-green-50 text-green-600 hover:bg-green-100' 
-                    : 'bg-amber-50 text-amber-600 hover:bg-amber-100'
-                }`}
+                className={`p-2.5 rounded-xl transition-all ${isPaused
+                  ? 'bg-green-50 text-green-600 hover:bg-green-100'
+                  : 'bg-amber-50 text-amber-600 hover:bg-amber-100'
+                  }`}
                 title={isPaused ? 'Resume campaign' : 'Pause campaign'}
               >
                 {isPaused ? <Play size={18} /> : <Pause size={18} />}
@@ -330,13 +343,13 @@ const CampaignCard = ({
           </div>
         </div>
       </div>
-      
+
       {/* Expanded Content */}
       {expanded && (
         <div className="border-t border-slate-100">
           {/* Run History Toggle */}
           <div className="px-6 py-3 bg-slate-50/50 border-b border-slate-100">
-            <button 
+            <button
               onClick={() => setShowRuns(!showRuns)}
               className="text-sm font-medium text-slate-600 hover:text-blue-600 flex items-center gap-2"
             >
@@ -344,7 +357,7 @@ const CampaignCard = ({
               Run History ({runs.length})
               {showRuns ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
-            
+
             {showRuns && runs.length > 0 && (
               <div className="mt-3 space-y-2">
                 {runs.slice(0, 5).map(run => (
@@ -370,13 +383,13 @@ const CampaignCard = ({
               </div>
             )}
           </div>
-          
+
           {/* Jobs by Status */}
           <div className="p-6 space-y-4">
             {STATUS_ORDER.map(status => {
               const statusJobs = jobsByStatus[status];
               if (statusJobs.length === 0) return null;
-              
+
               return (
                 <div key={status} className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -398,7 +411,7 @@ const CampaignCard = ({
                 </div>
               );
             })}
-            
+
             {campaignJobs.length === 0 && (
               <div className="text-center py-8 text-slate-400">
                 <Eye size={32} className="mx-auto mb-2 opacity-50" />
@@ -428,7 +441,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    
+
     try {
       await api.createCampaign({
         user_id: userId,
@@ -462,7 +475,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
             <X size={20} />
           </button>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
             <label className="block text-sm font-bold text-slate-600 mb-1">Campaign Name</label>
@@ -475,7 +488,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               required
             />
           </div>
-          
+
           <div>
             <label className="block text-sm font-bold text-slate-600 mb-1">Job Titles (comma separated)</label>
             <input
@@ -487,7 +500,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               required
             />
           </div>
-          
+
           <div>
             <label className="block text-sm font-bold text-slate-600 mb-1">Locations (comma separated)</label>
             <input
@@ -499,7 +512,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               required
             />
           </div>
-          
+
           <div>
             <label className="block text-sm font-bold text-slate-600 mb-1">Keywords (optional)</label>
             <input
@@ -510,7 +523,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
             />
           </div>
-          
+
           {/* Campaign Duration Settings */}
           <div className="flex items-center gap-4">
             <div className="flex-1">
@@ -525,7 +538,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               />
               <span className="text-xs text-slate-400 mt-1">Total days to run</span>
             </div>
-            
+
             <div className="flex-1">
               <label className="block text-sm font-bold text-slate-600 mb-1">Jobs Per Day</label>
               <input
@@ -539,7 +552,7 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               <span className="text-xs text-slate-400 mt-1">Max applications/day</span>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             <div className="flex-1">
               <label className="block text-sm font-bold text-slate-600 mb-1">Jobs Per Run</label>
@@ -553,24 +566,23 @@ const CreateCampaignModal = ({ isOpen, onClose, userId, onCreated }: CreateCampa
               />
               <span className="text-xs text-slate-400 mt-1">Jobs to scout per run</span>
             </div>
-            
+
             <div className="flex-1">
               <label className="block text-sm font-bold text-slate-600 mb-1">Auto Apply</label>
               <button
                 type="button"
                 onClick={() => setAutoApply(!autoApply)}
-                className={`w-full px-4 py-3 rounded-xl border transition-colors ${
-                  autoApply 
-                    ? 'bg-green-50 border-green-300 text-green-700' 
-                    : 'bg-slate-50 border-slate-200 text-slate-500'
-                }`}
+                className={`w-full px-4 py-3 rounded-xl border transition-colors ${autoApply
+                  ? 'bg-green-50 border-green-300 text-green-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-500'
+                  }`}
               >
                 {autoApply ? 'Enabled' : 'Disabled'}
               </button>
               <span className="text-xs text-slate-400 mt-1">Auto-send applications</span>
             </div>
           </div>
-          
+
           <button
             type="submit"
             disabled={isSubmitting}
@@ -599,24 +611,24 @@ export const ApplicationsView = ({ userId }: ApplicationsViewProps) => {
     try {
       setIsLoading(true);
       setError(null);
-      
+
       const [campaignsData, jobsData] = await Promise.all([
         api.getCampaigns(userId),
         api.getJobs(userId),
       ]);
-      
+
       setCampaigns(campaignsData);
       setJobs(jobsData);
-      
+
       // Fetch runs for each campaign
-      const runsPromises = campaignsData.map(c => 
+      const runsPromises = campaignsData.map(c =>
         api.getCampaignRuns(c.id).then(runs => ({ id: c.id, runs }))
       );
       const runsResults = await Promise.all(runsPromises);
       const runsMap: Record<number, CampaignRun[]> = {};
       runsResults.forEach(r => { runsMap[r.id] = r.runs; });
       setCampaignRuns(runsMap);
-      
+
     } catch (err) {
       console.error('Failed to fetch data:', err);
       setError('Failed to load campaigns. Please try again.');
@@ -681,14 +693,14 @@ export const ApplicationsView = ({ userId }: ApplicationsViewProps) => {
             </p>
           </div>
           <div className="flex gap-3">
-            <button 
+            <button
               onClick={fetchData}
               className="px-4 py-2 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl text-sm hover:bg-slate-50 shadow-sm flex items-center gap-2"
             >
               <RefreshCw size={16} />
               Refresh
             </button>
-            <button 
+            <button
               onClick={() => setShowCreateModal(true)}
               className="px-4 py-2 bg-blue-600 text-white font-bold rounded-xl text-sm shadow-lg shadow-blue-100 hover:bg-blue-700 flex items-center gap-2"
             >
@@ -712,7 +724,7 @@ export const ApplicationsView = ({ userId }: ApplicationsViewProps) => {
           <Briefcase size={48} className="mx-auto text-slate-300 mb-4" />
           <h3 className="text-lg font-bold text-slate-700 mb-2">No campaigns yet</h3>
           <p className="text-slate-500 mb-6">Create your first campaign to start finding jobs automatically</p>
-          <button 
+          <button
             onClick={() => setShowCreateModal(true)}
             className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 inline-flex items-center gap-2"
           >

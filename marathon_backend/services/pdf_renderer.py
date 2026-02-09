@@ -72,7 +72,8 @@ def escape_data(data) -> any:
 
 def check_latex_available() -> bool:
     """Check if any LaTeX compiler is installed."""
-    return shutil.which("pdflatex") is not None or shutil.which("tectonic") is not None
+    user_pdflatex = "/Users/musabumair/bin/pdflatex"
+    return shutil.which(user_pdflatex) is not None or shutil.which("pdflatex") is not None or shutil.which("tectonic") is not None
 
 
 def compile_latex(tex_path: str, output_dir: str = None) -> Optional[str]:
@@ -89,11 +90,20 @@ def compile_latex(tex_path: str, output_dir: str = None) -> Optional[str]:
     if output_dir is None:
         output_dir = str(OUTPUT_DIR)
     
-    # 1. Try pdflatex (Standard LaTeX compiler)
-    if shutil.which("pdflatex"):
-        print(f"   ⚙️  Compiling with pdflatex...")
+    # 0. Check absolute path (User specific)
+    user_pdflatex = "/Users/musabumair/bin/pdflatex"
+    
+    # 1. Try absolute path or pdflatex in PATH
+    latex_cmd = "pdflatex"
+    if shutil.which(user_pdflatex):
+        latex_cmd = user_pdflatex
+    elif shutil.which("pdflatex"):
+        latex_cmd = "pdflatex"
+    
+    if shutil.which(latex_cmd):
+        print(f"   ⚙️  Compiling with {latex_cmd}...")
         cmd = [
-            "pdflatex", 
+            latex_cmd, 
             "-interaction=nonstopmode", 
             "-output-directory", output_dir, 
             tex_path

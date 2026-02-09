@@ -46,18 +46,27 @@ def extract_json(text: str) -> Dict:
 
     # 3. Clean and Parse
     try:
-        # Remove common control characters that break JSON
-        json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
-        return json.loads(json_str)
+        # Instead of deleting control chars: escape newlines inside strings
+        # json.loads fails on literal newlines in strings, but allows \n outside
+        # We'll just try to parse first.
+        # If that fails, we can try to escape newlines if they seem to be the issue
+        # Use regex to find unescaped control characters in string values? Risky.
+        # Safer: Just remove dangerous non-printable chars (0x00-0x1F) EXCEPT 
+        # newline (0xA), carriage return (0xD), and tab (0x9)
+        json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', json_str)
+        # Also clean up potential trailing commas (common LLM error)
+        json_str = re.sub(r",\s*}", "}", json_str)
+        json_str = re.sub(r",\s*]", "]", json_str)
+        return json.loads(json_str, strict=False)
     except json.JSONDecodeError:
-        # 4. Last Resort: Auto-repair trailing commas (common LLM error)
+        # 4. Fallback: Try a more aggressive cleanup
         try:
-            # Remove trailing commas before } or ]
-            json_str = re.sub(r",\s*}", "}", json_str)
-            json_str = re.sub(r",\s*]", "]", json_str)
-            return json.loads(json_str)
+             # Last resort: escaped newlines?
+             json_str = json_str.replace('\n', '\\n').replace('\r', '').replace('\t', '\\t')
+             return json.loads(json_str, strict=False)
         except:
-            print(f"❌ Unfixable JSON: {json_str[:100]}...")
+            print(f"❌ Unfixable JSON: {json_str[:500]}...")  # Increased log length
+            print(f"DEBUG RAW: {json_str}")
             raise ValueError("Fatal JSON parsing error")
 
 
@@ -82,10 +91,12 @@ Extract the following into structured JSON:
 Return ONLY raw JSON.
 """
     try:
-        text = call_gemini(prompt, max_tokens=1024, temperature=0.1)
+        text = call_gemini(prompt, max_tokens=2048, temperature=0.1)
         return extract_json(text)
     except Exception as e:
         print(f"❌ JD Analysis failed: {e}")
+        # DEBUG: Print the raw text to understand why it failed
+        print(f"DEBUG: Raw response text: {text[:500]}..." if 'text' in locals() else "DEBUG: No text variable")
         # Return safe fallback to prevent downstream 422 errors
         return {
             "company_name": "Hiring Company",
@@ -117,8 +128,10 @@ Tailor the profile to the JD.
 
 RULES:
 1. Use the STAR method for bullets.
-2. IMPORTANT: You MUST return valid JSON.
-3. Do not invent experiences, but highlight relevant existing ones.
+2. IMPORTANT: You MUST return valid JSON. Do NOT use markdown formatting.
+3. Do NOT include placeholders like [FULL NAME] or [PHONE]. Use data from the candidate profile.
+4. If data is missing (e.g. phone number), use empty string "" or omit the field.
+5. Do not invent experiences, but highlight relevant existing ones.
 
 OUTPUT STRUCTURE:
 {
@@ -130,9 +143,11 @@ OUTPUT STRUCTURE:
 }
 """
 
+    candidate_json = profile_data.get('parsed_resume') or profile_data
+    
     user_prompt = f"""
 --- CANDIDATE ---
-{json.dumps(profile_data.get('parsed_resume', {}), indent=2)}
+{json.dumps(candidate_json, indent=2)}
 
 --- TARGET JOB ---
 {json.dumps(jd_analysis, indent=2)}
@@ -142,10 +157,13 @@ OUTPUT STRUCTURE:
 """
 
     try:
-        text = call_gemini(user_prompt, system=system_prompt, max_tokens=2500, temperature=0.4)
+        # Increase max tokens to prevent truncated JSON
+        text = call_gemini(user_prompt, system=system_prompt, max_tokens=8192, temperature=0.4)
         return extract_json(text)
     except Exception as e:
         print(f"❌ Resume drafting failed: {e}")
+        # Retry once with higher temperature/more leniency if strictly needed, 
+        # but for now let's just return None to trigger the loop fallback
         return None
 
 
