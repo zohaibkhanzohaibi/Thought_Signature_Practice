@@ -99,9 +99,10 @@ def get_all_active_campaigns() -> List[Dict]:
 
 def create_job_application(user_id: str, job: Dict, status: str = "scouted") -> Dict:
     """Create a new job application."""
+    job_title = job.get("job_title") or job.get("title") or "Unknown"
     data = {
         "user_id": user_id,
-        "job_title": job.get("title"),
+        "job_title": job_title,
         "company_name": job.get("company"),
         "source_url": job.get("url"),
         "location": job.get("location"),
