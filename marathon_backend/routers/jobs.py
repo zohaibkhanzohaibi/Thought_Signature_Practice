@@ -43,6 +43,10 @@ async def list_jobs(
         query = query.eq("status", status)
     
     result = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        # Ensure 'company' is always a string for response validation
+    for job in result.data:
+        if job.get('company') is None:
+            job['company'] = ""
     return result.data
 
 

@@ -1,3 +1,5 @@
+from rapidfuzz import fuzz
+from datetime import datetime, timezone, timedelta
 """
 Campaigns Router - Job search campaign management endpoints.
 """
@@ -316,6 +318,8 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
         
         print(f"🔎 Found {len(local_jobs_raw)} local public jobs. Filtering...")
         
+        similarity_threshold = 70  # Adjust as needed (0-100)
+        now = datetime.now(timezone.utc)
         for job in local_jobs_raw:
             # Map to application schema
             mapped_job = {
@@ -330,20 +334,18 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
                 "match_score": 85, # Default high score for curated local jobs
                 "source": "public_db"
             }
-            
-            # Simple keyword filtering
-            # Match ANY job title in config
-            title_match = False
+
+            # Fuzzy job title matching
+            best_score = 0
+            best_title = None
             j_title = mapped_job["job_title"].lower()
-            if not job_titles:
-                title_match = True
-            else:
-                for t in job_titles:
-                    if t.lower() in j_title:
-                        title_match = True
-                        break
-            
-            # Match ANY location in config
+            for t in job_titles:
+                score = fuzz.token_set_ratio(t.lower(), j_title)
+                if score > best_score:
+                    best_score = score
+                    best_title = t
+
+            # Location match (substring, as before)
             loc_match = False
             j_loc = mapped_job["location"].lower()
             if not locations:
@@ -355,8 +357,17 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
                         loc_match = True
                     elif l_lower in j_loc:
                         loc_match = True
-            
-            if title_match and loc_match:
+
+            # Only add if similarity is above threshold, location matches, and job is recent
+            created_at = mapped_job["posted_date"]
+            try:
+                created_at_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")) if created_at else None
+            except Exception:
+                created_at_dt = None
+            is_recent = created_at_dt and (now - created_at_dt) <= timedelta(days=7)
+
+            if best_score >= similarity_threshold and loc_match and is_recent:
+                mapped_job["similarity_score"] = best_score
                 local_jobs.append(mapped_job)
         
         print(f"   Matched {len(local_jobs)} local jobs.")

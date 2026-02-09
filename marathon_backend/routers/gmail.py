@@ -1,3 +1,11 @@
+from pydantic import BaseModel
+# Request model for sending email
+class SendEmailRequest(BaseModel):
+    user_id: str
+    to: str
+    subject: str
+    body: str
+
 """
 Gmail Router - Gmail OAuth and inbox monitoring endpoints.
 """
@@ -103,15 +111,32 @@ async def disconnect_gmail(user_id: str):
 
 @router.get("/drafts/{user_id}")
 async def list_drafts(user_id: str, limit: int = 10):
-    """List Gmail drafts for a user."""
+    """List Gmail drafts for a user, with parsed details."""
     tokens = db.get_gmail_tokens(user_id)
     if not tokens:
         raise HTTPException(status_code=400, detail="Gmail not connected")
-    
+
     gmail = GmailService(tokens)
-    drafts = gmail.list_drafts(max_results=limit)
-    
-    return {"drafts": drafts}
+    draft_refs = gmail.list_drafts(max_results=limit)
+    parsed_drafts = []
+    for d in draft_refs:
+        try:
+            draft = gmail.get_draft(d["id"])
+            msg = draft["message"]
+            headers = {h['name']: h['value'] for h in msg["payload"].get("headers", [])}
+            # Extract body (reuse _get_body from GmailService)
+            body = gmail._get_body(msg["payload"])
+            parsed_drafts.append({
+                "id": d["id"],
+                "subject": headers.get("Subject", ""),
+                "to": headers.get("To", ""),
+                "body": body,
+                "timestamp": msg.get("internalDate", ""),
+                "snippet": msg.get("snippet", "")
+            })
+        except Exception as e:
+            print(f"Failed to parse draft {d['id']}: {e}")
+    return {"drafts": parsed_drafts}
 
 
 @router.get("/inbox/{user_id}")
@@ -363,3 +388,37 @@ async def generate_reply_for_email(user_id: str, message_id: str, create_draft: 
     
     return result
 
+@router.post("/send")
+async def send_email(request: SendEmailRequest):
+    """Send email through Gmail (creates and sends a draft)."""
+    tokens = db.get_gmail_tokens(request.user_id)
+    if not tokens:
+        raise HTTPException(status_code=400, detail="Gmail not connected")
+    gmail = GmailService(tokens)
+    draft_id = gmail.create_draft(
+        to=request.to,
+        subject=request.subject,
+        body=request.body
+    )
+    result = gmail.send_draft(draft_id)
+    return {"success": True, "message_id": result.get("id")}
+from fastapi import BackgroundTasks
+# In-memory store for active monitors (for demonstration; use persistent store/actor for production)
+active_monitors = {}
+
+@router.post("/connect")
+async def connect_gmail(user_id: str, token: dict, background_tasks: BackgroundTasks):
+    """Connect to Gmail and start monitoring (placeholder, no real background thread)."""
+    # In production, use a persistent background worker or actor system
+    # Here, just store the token for the user
+    active_monitors[user_id] = token
+    # Optionally, start a background task for polling/monitoring
+    # background_tasks.add_task(your_monitoring_function, user_id, token)
+    return {"success": True, "message": "Gmail monitoring started"}
+
+@router.post("/disconnect")
+async def disconnect_gmail(user_id: str):
+    """Disconnect Gmail monitoring (placeholder)."""
+    if user_id in active_monitors:
+        del active_monitors[user_id]
+    return {"success": True}
