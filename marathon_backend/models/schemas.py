@@ -357,3 +357,8 @@ class PublicJobCreate(BaseModel):
 class PublicJobResponse(PublicJobCreate):
     id: int
     created_at: datetime
+    
+    
+class GmailConnectRequest(BaseModel):
+    user_id: str
+    token: Dict

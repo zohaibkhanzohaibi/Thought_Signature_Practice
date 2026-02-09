@@ -1,10 +1,17 @@
 from pydantic import BaseModel
+from ..models.schemas import GmailConnectRequest
+from ..services import socketio_service
+
 # Request model for sending email
 class SendEmailRequest(BaseModel):
     user_id: str
     to: str
     subject: str
     body: str
+
+# Request model for disconnect
+class DisconnectRequest(BaseModel):
+    user_id: str
 
 """
 Gmail Router - Gmail OAuth and inbox monitoring endpoints.
@@ -109,33 +116,61 @@ async def disconnect_gmail(user_id: str):
     return {"message": "Gmail disconnected"}
 
 
+@router.get("/debug/tokens/{user_id}")
+async def debug_tokens(user_id: str):
+    """Debug endpoint to check token status."""
+    db_tokens = db.get_gmail_tokens(user_id)
+    active_tokens = active_monitors.get(user_id)
+    
+    return {
+        "user_id": user_id,
+        "has_db_tokens": db_tokens is not None,
+        "has_active_tokens": active_tokens is not None,
+        "active_monitors_keys": list(active_monitors.keys()),
+        "db_tokens_value": str(db_tokens) if db_tokens else None,
+        "active_tokens_value": str(active_tokens) if active_tokens else None
+    }
+
+
 @router.get("/drafts/{user_id}")
 async def list_drafts(user_id: str, limit: int = 10):
     """List Gmail drafts for a user, with parsed details."""
+    # Try to get tokens from database first, then fall back to active_monitors
     tokens = db.get_gmail_tokens(user_id)
+    
+    if not tokens and user_id in active_monitors:
+        tokens = active_monitors[user_id]
+    
     if not tokens:
-        raise HTTPException(status_code=400, detail="Gmail not connected")
+        raise HTTPException(
+            status_code=400, 
+            detail="Gmail not connected. Please connect your Gmail account first."
+        )
 
-    gmail = GmailService(tokens)
-    draft_refs = gmail.list_drafts(max_results=limit)
-    parsed_drafts = []
-    for d in draft_refs:
-        try:
-            draft = gmail.get_draft(d["id"])
-            msg = draft["message"]
-            headers = {h['name']: h['value'] for h in msg["payload"].get("headers", [])}
-            # Extract body (reuse _get_body from GmailService)
-            body = gmail._get_body(msg["payload"])
-            parsed_drafts.append({
-                "id": d["id"],
-                "subject": headers.get("Subject", ""),
-                "to": headers.get("To", ""),
-                "body": body,
-                "timestamp": msg.get("internalDate", ""),
-                "snippet": msg.get("snippet", "")
-            })
-        except Exception as e:
-            print(f"Failed to parse draft {d['id']}: {e}")
+    try:
+        gmail = GmailService(tokens)
+        draft_refs = gmail.list_drafts(max_results=limit)
+        parsed_drafts = []
+        for d in draft_refs:
+            try:
+                draft = gmail.get_draft(d["id"])
+                msg = draft["message"]
+                headers = {h['name']: h['value'] for h in msg["payload"].get("headers", [])}
+                # Extract body (reuse _get_body from GmailService)
+                body = gmail._get_body(msg["payload"])
+                parsed_drafts.append({
+                    "id": d["id"],
+                    "subject": headers.get("Subject", ""),
+                    "to": headers.get("To", ""),
+                    "body": body,
+                    "timestamp": msg.get("internalDate", ""),
+                    "snippet": msg.get("snippet", "")
+                })
+            except Exception as e:
+                print(f"Failed to parse draft {d['id']}: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch drafts: {str(e)}")
+    
     return {"drafts": parsed_drafts}
 
 
@@ -154,22 +189,48 @@ async def check_inbox(
     - "from:recruiter" - Messages from recruiters
     - "subject:interview" - Messages about interviews
     """
+    print(f"DEBUG: Fetching inbox for user {user_id}")
+    print(f"DEBUG: active_monitors keys: {list(active_monitors.keys())}")
+    print(f"DEBUG: user_id in active_monitors: {user_id in active_monitors}")
+    
+    # Try to get tokens from database first, then fall back to active_monitors
     tokens = db.get_gmail_tokens(user_id)
+    print(f"DEBUG: db.get_gmail_tokens returned: {tokens is not None}")
+    
+    if not tokens and user_id in active_monitors:
+        tokens = active_monitors[user_id]
+        print(f"DEBUG: Using tokens from active_monitors")
+    
     if not tokens:
-        raise HTTPException(status_code=400, detail="Gmail not connected")
+        print(f"DEBUG: No tokens found for user {user_id}")
+        raise HTTPException(
+            status_code=400, 
+            detail="Gmail not connected. Please connect your Gmail account first."
+        )
     
-    gmail = GmailService(tokens)
-    
-    label_ids = ["INBOX"]
-    if unread_only:
-        label_ids.append("UNREAD")
-    
-    messages = gmail.get_messages(query=query, label_ids=label_ids, max_results=limit)
-    
-    return {
-        "count": len(messages),
-        "messages": messages
-    }
+    try:
+        print(f"DEBUG: Creating GmailService with tokens")
+        gmail = GmailService(tokens)
+        
+        label_ids = ["INBOX"]
+        if unread_only:
+            label_ids.append("UNREAD")
+        
+        print(f"DEBUG: Fetching messages with query='{query}', labels={label_ids}, limit={limit}")
+        messages = gmail.get_messages(query=query, label_ids=label_ids, max_results=limit)
+        print(f"DEBUG: Got {len(messages)} messages")
+        
+        return {
+            "count": len(messages),
+            "messages": messages
+        }
+    except Exception as e:
+        print(f"DEBUG: Exception in check_inbox: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch inbox: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch inbox: {str(e)}")
 
 
 @router.get("/job-responses/{user_id}")
@@ -407,18 +468,65 @@ from fastapi import BackgroundTasks
 active_monitors = {}
 
 @router.post("/connect")
-async def connect_gmail(user_id: str, token: dict, background_tasks: BackgroundTasks):
-    """Connect to Gmail and start monitoring (placeholder, no real background thread)."""
-    # In production, use a persistent background worker or actor system
-    # Here, just store the token for the user
-    active_monitors[user_id] = token
-    # Optionally, start a background task for polling/monitoring
-    # background_tasks.add_task(your_monitoring_function, user_id, token)
-    return {"success": True, "message": "Gmail monitoring started"}
+async def connect_gmail(
+    request: GmailConnectRequest,
+    background_tasks: BackgroundTasks
+):
+    user_id = request.user_id
+    tokens = request.token
+    
+    # Store in memory for monitoring
+    active_monitors[user_id] = tokens
+    
+    # Try to get email from Google API using the access token
+    email_address = "unknown@gmail.com"
+    try:
+        gmail = GmailService(tokens)
+        email_address = gmail.email_address
+    except Exception as e:
+        print(f"Warning: Could not retrieve email address: {e}")
+    
+    # Save tokens to database
+    try:
+        db.save_gmail_tokens(
+            user_id=user_id,
+            email=email_address,
+            tokens={
+                "access_token": tokens.get("access_token"),
+                "refresh_token": tokens.get("refresh_token"),
+                "expiry": tokens.get("expiry"),
+                "scopes": tokens.get("scopes", [])
+            }
+        )
+    except Exception as e:
+        print(f"Warning: Could not save Gmail tokens to database: {e}")
+    
+    # Emit Socket.IO event to notify client of successful connection
+    await socketio_service.emit_gmail_update(
+        user_id,
+        "connected",
+        {"message": "Gmail monitoring started"}
+    )
+    
+    return {
+        "success": True,
+        "message": "Gmail monitoring started",
+        "email": email_address
+    }
 
 @router.post("/disconnect")
-async def disconnect_gmail(user_id: str):
-    """Disconnect Gmail monitoring (placeholder)."""
+async def disconnect_gmail(request: DisconnectRequest):
+    """Disconnect Gmail monitoring."""
+    user_id = request.user_id
+    
     if user_id in active_monitors:
         del active_monitors[user_id]
+    
+    # Emit Socket.IO event to notify client of disconnection
+    await socketio_service.emit_gmail_update(
+        user_id,
+        "disconnected",
+        {"message": "Gmail monitoring stopped"}
+    )
+    
     return {"success": True}

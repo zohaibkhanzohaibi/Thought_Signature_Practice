@@ -18,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from socketio import AsyncServer
+from socketio.asgi import ASGIApp
 
 # Load environment variables
 load_dotenv()
@@ -25,10 +27,20 @@ load_dotenv()
 # Import routers
 # Import routers
 from .routers import profile, campaigns, jobs, gmail, auth
+from .services import socketio_service
 
+# Socket.IO setup for real-time communication (must be before lifespan)
+sio = AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins=['*'],
+    ping_timeout=60,
+    ping_interval=25,
+    engineio_logger=False,
+    logger=True
+)
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     """Application lifespan handler."""
     # Startup
     print("🚀 Marathon Backend starting...")
@@ -36,6 +48,10 @@ async def lifespan(app: FastAPI):
     # Create necessary directories
     Path("resumes").mkdir(exist_ok=True)
     Path("logs").mkdir(exist_ok=True)
+    
+    # Initialize Socket.IO service
+    socketio_service.initialize_socketio(sio)
+    print("✅ Socket.IO initialized")
     
     # Verify required env vars
     required_vars = ["SUPABASE_URL", "SUPABASE_KEY", "GEMINI_API_KEY"]
@@ -52,7 +68,7 @@ async def lifespan(app: FastAPI):
 
 
 # Create FastAPI app
-app = FastAPI(
+_fastapi_app = FastAPI(
     title="Marathon Job Agent API",
     description="""
     AI-powered job search and application agent with:
@@ -67,7 +83,7 @@ app = FastAPI(
 )
 
 # CORS middleware for local development
-app.add_middleware(
+_fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Configure appropriately for production
     allow_credentials=True,
@@ -75,9 +91,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Socket.IO event handlers
+@sio.event
+async def connect(sid, environ):
+    """Handle client connection."""
+    query_string = environ.get('QUERY_STRING', '')
+    user_id = 'unknown'
+    if 'userId=' in query_string:
+        user_id = query_string.split('userId=')[1].split('&')[0]
+    print(f"✅ Socket.IO Client connected: {sid} (user: {user_id})")
+    print(f"   QUERY_STRING: {query_string}")
+    print(f"   PATH_INFO: {environ.get('PATH_INFO', 'N/A')}")
+    await sio.emit('response', {'data': 'Connected to Marathon Backend', 'sid': sid}, to=sid)
+
+@sio.event
+async def disconnect(sid):
+    """Handle client disconnection."""
+    print(f"❌ Socket.IO Client disconnected: {sid}")
+
+@sio.on('subscribe_gmail')
+async def subscribe_gmail_updates(sid, data):
+    """Subscribe to Gmail updates for a user."""
+    user_id = data.get('user_id') if data else 'unknown'
+    print(f"📧 User {user_id} subscribed to Gmail updates (sid: {sid})")
+    await sio.emit('gmail_subscribed', {'user_id': user_id, 'message': 'Subscribed to Gmail updates'}, to=sid)
+
 
 # Global exception handler
-@app.exception_handler(Exception)
+@_fastapi_app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     print(f"❌ Unhandled error: {exc}")
     return JSONResponse(
@@ -87,15 +128,15 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers
-app.include_router(auth.router)
-app.include_router(profile.router)
-app.include_router(campaigns.router)
-app.include_router(jobs.router)
-app.include_router(gmail.router)
+_fastapi_app.include_router(auth.router)
+_fastapi_app.include_router(profile.router)
+_fastapi_app.include_router(campaigns.router)
+_fastapi_app.include_router(jobs.router)
+_fastapi_app.include_router(gmail.router)
 
 
 # Health check endpoint
-@app.get("/health")
+@_fastapi_app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
@@ -106,7 +147,7 @@ async def health_check():
 
 
 # Root endpoint
-@app.get("/")
+@_fastapi_app.get("/")
 async def root():
     """API root with endpoint summary."""
     return {
@@ -149,9 +190,14 @@ async def root():
 
 # Mount static files for resume downloads
 try:
-    app.mount("/resumes", StaticFiles(directory="resumes"), name="resumes")
+    _fastapi_app.mount("/resumes", StaticFiles(directory="resumes"), name="resumes")
 except:
     pass  # Directory may not exist yet
+
+
+# Create ASGI app that wraps FastAPI with Socket.IO
+# This BECOMES THE MAIN APP when running with uvicorn
+app = ASGIApp(sio, _fastapi_app)
 
 
 if __name__ == "__main__":

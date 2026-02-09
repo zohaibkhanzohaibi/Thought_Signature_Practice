@@ -21,12 +21,31 @@ interface Draft {
   snippet: string;
 }
 
+// Utility function to generate or retrieve user ID
+const getUserId = (): string => {
+  const STORAGE_KEY = 'marathon_user_id';
+  let userId = localStorage.getItem(STORAGE_KEY);
+  
+  if (!userId) {
+    // Generate a UUID v4
+    userId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+    localStorage.setItem(STORAGE_KEY, userId);
+  }
+  
+  return userId;
+};
+
 export const InboxView = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [emails, setEmails] = useState<Email[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [userId] = useState<string>(getUserId());
 
   // Connect to Google OAuth
   const googleLogin = useGoogleLogin({
@@ -46,14 +65,17 @@ export const InboxView = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'current-user-id', // Replace with actual user ID
-          token: accessToken,
+          user_id: userId,
+          token: { access_token: accessToken },
         }),
       });
 
       if (response.ok) {
         setIsConnected(true);
         initializeWebSocket();
+        // Fetch emails and drafts after connection
+        fetchEmails();
+        fetchDrafts();
       }
     } catch (error) {
       console.error('Failed to connect to backend:', error);
@@ -64,14 +86,15 @@ export const InboxView = () => {
 
   const initializeWebSocket = () => {
     const newSocket = io('http://localhost:8000', {
-      query: { userId: 'current-user-id' },
+      query: { userId },
     });
 
     newSocket.on('connect', () => {
       console.log('WebSocket connected');
     });
 
-    newSocket.on('gmail_update_current-user-id', (data) => {
+    const eventName = `gmail_update_${userId}`;
+    newSocket.on(eventName, (data) => {
       if (data.type === 'new_email') {
         setEmails(prev => [data.email, ...prev]);
       } else if (data.type === 'drafts_updated') {
@@ -90,7 +113,7 @@ export const InboxView = () => {
     await fetch('http://localhost:8000/api/gmail/disconnect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 'current-user-id' }),
+      body: JSON.stringify({ user_id: userId }),
     });
     
     setIsConnected(false);
@@ -98,10 +121,42 @@ export const InboxView = () => {
     setDrafts([]);
   };
 
+  const fetchEmails = async () => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/gmail/inbox/${userId}?limit=20`);
+      if (response.ok) {
+        const data = await response.json();
+        // Map the messages to our Email interface
+        const formattedEmails = (data.messages || []).map((msg: any) => ({
+          id: msg.id || '',
+          subject: msg.subject || 'No Subject',
+          from: msg.from || 'Unknown Sender',
+          body: msg.body || '',
+          timestamp: msg.internalDate || '',
+          snippet: msg.snippet || msg.body || '',
+        }));
+        setEmails(formattedEmails);
+        console.log(`Loaded ${formattedEmails.length} emails`);
+      } else {
+        console.error('Failed to fetch emails:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching emails:', error);
+    }
+  };
+
   const fetchDrafts = async () => {
-    const response = await fetch('http://localhost:8000/api/gmail/drafts?userId=current-user-id');
-    const data = await response.json();
-    setDrafts(data.drafts);
+    try {
+      const response = await fetch(`http://localhost:8000/api/gmail/drafts/${userId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setDrafts(data.drafts);
+      } else {
+        console.error('Failed to fetch drafts:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching drafts:', error);
+    }
   };
 
   useEffect(() => {
@@ -110,7 +165,7 @@ export const InboxView = () => {
         socket.disconnect();
       }
     };
-  }, [socket]);
+  }, [socket, userId]);
 
   if (!isConnected) {
     return (
@@ -167,9 +222,18 @@ export const InboxView = () => {
           <div className="bg-white rounded-2xl shadow-lg p-6">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-slate-800">Recent Job Emails</h2>
-              <span className="bg-blue-100 text-blue-700 text-sm font-semibold py-1 px-3 rounded-full">
-                {emails.length} new
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="bg-blue-100 text-blue-700 text-sm font-semibold py-1 px-3 rounded-full">
+                  {emails.length} new
+                </span>
+                <button
+                  onClick={fetchEmails}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2 px-4 rounded-xl flex items-center gap-2 transition-colors"
+                >
+                  <RefreshCw size={16} />
+                  Refresh
+                </button>
+              </div>
             </div>
             
             <div className="space-y-4 max-h-[500px] overflow-y-auto">
