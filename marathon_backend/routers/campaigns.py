@@ -310,8 +310,83 @@ async def _execute_campaign_run(campaign_id: str, run_id: str, max_jobs_today: i
         # Limit jobs to minimum of max_jobs_per_run and remaining daily quota
         max_jobs = max_jobs_today
         
-        # Run search
-        jobs = agent.search(query, num_jobs=max_jobs)
+        # --- 1. Search Local Public Job Listings (7 days) ---
+        local_jobs_raw = db.get_recent_public_job_listings(days=7)
+        local_jobs = []
+        
+        print(f"🔎 Found {len(local_jobs_raw)} local public jobs. Filtering...")
+        
+        for job in local_jobs_raw:
+            # Map to application schema
+            mapped_job = {
+                "company": job.get("company") or "Unknown",
+                "job_title": job.get("title") or "Unknown",
+                "location": job.get("location") or "Unknown",
+                "job_url": job.get("source_url"),
+                "salary_range": "Unknown",
+                "posted_date": job.get("created_at"),
+                "job_description": job.get("description") or "",
+                "application_email": job.get("contact_email"), # CRITICAL
+                "match_score": 85, # Default high score for curated local jobs
+                "source": "public_db"
+            }
+            
+            # Simple keyword filtering
+            # Match ANY job title in config
+            title_match = False
+            j_title = mapped_job["job_title"].lower()
+            if not job_titles:
+                title_match = True
+            else:
+                for t in job_titles:
+                    if t.lower() in j_title:
+                        title_match = True
+                        break
+            
+            # Match ANY location in config
+            loc_match = False
+            j_loc = mapped_job["location"].lower()
+            if not locations:
+                loc_match = True
+            else:
+                for l in locations:
+                    l_lower = l.lower()
+                    if l_lower == "remote" and "remote" in j_loc:
+                        loc_match = True
+                    elif l_lower in j_loc:
+                        loc_match = True
+            
+            if title_match and loc_match:
+                local_jobs.append(mapped_job)
+        
+        print(f"   Matched {len(local_jobs)} local jobs.")
+
+        # --- 2. Run AI Search ---
+        # Adjust max_jobs for AI (giving priority to local jobs, but still fetching some AI jobs if needed)
+        # If we have enough local jobs to fill the daily quota, we might skip AI or fetch fewer?
+        # Let's fetch AI jobs to fill the gap or at least try to find some fresh ones.
+        ai_jobs_count = max(0, max_jobs - len(local_jobs))
+        ai_jobs = []
+        if ai_jobs_count > 0:
+            ai_jobs = agent.search(query, num_jobs=ai_jobs_count)
+        
+        # Merge lists (Local first)
+        all_jobs = local_jobs + ai_jobs
+        
+        # --- 3. Deduplicate ---
+        existing_keys = db.get_applied_job_keys(state["user_id"])
+        jobs = []
+        
+        for j in all_jobs:
+            # Generate key: company|title
+            key = f"{(j.get('company') or '').lower().strip()}|{(j.get('job_title') or '').lower().strip()}"
+            if key not in existing_keys:
+                jobs.append(j)
+                existing_keys.add(key) # Prevent internal duplicates in this run
+        
+        # Cap at max_jobs ensure we don't exceed daily limit
+        jobs = jobs[:max_jobs]
+
         jobs_found = len(jobs)
         jobs_applied = 0
         summary = f"Found {jobs_found} jobs."

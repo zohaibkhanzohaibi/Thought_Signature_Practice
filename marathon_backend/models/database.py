@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from supabase import create_client, Client
 from dotenv import load_dotenv
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 
@@ -142,7 +143,7 @@ def update_job_application(job_id: str, data: Dict) -> Dict:
 def get_applied_job_keys(user_id: str) -> set:
     """Get set of company|title keys for deduplication."""
     apps = get_user_applications(user_id)
-    return {f"{a['company_name'].lower().strip()}|{a['job_title'].lower().strip()}" for a in apps}
+    return {f"{(a.get('company_name') or '').lower().strip()}|{(a.get('job_title') or '').lower().strip()}" for a in apps}
 
 
 def get_pending_applications(user_id: str) -> List[Dict]:
@@ -249,6 +250,17 @@ def complete_campaign_run(run_id: str, stats: Dict) -> Dict:
 
 
 # ============================================
+# PUBLIC JOB LISTINGS OPERATIONS
+# ============================================
+
+def get_recent_public_job_listings(days: int = 7) -> List[Dict]:
+    """Get active job listings from the last N days."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    res = supabase.table("public_job_listings").select("*").eq("is_active", True).gte("created_at", cutoff).execute()
+    return res.data or []
+
+
+# ============================================
 # CLASS WRAPPER FOR ROUTERS
 # ============================================
 
@@ -297,6 +309,9 @@ class MarathonDB:
     
     def get_user_applications(self, user_id: str, status: str = None) -> List[Dict]:
         return get_user_applications(user_id, status)
+    
+    def get_applied_job_keys(self, user_id: str) -> set:
+        return get_applied_job_keys(user_id)
     
     def create_job_application(self, user_id: str, job: Dict, status: str = "scouted") -> Dict:
         return create_job_application(user_id, job, status)
@@ -349,4 +364,8 @@ class MarathonDB:
         
         res = supabase.table("campaign_runs").update(data).eq("id", run_id).execute()
         return res.data[0] if res.data else None
+
+    # Public Job Listings
+    def get_recent_public_job_listings(self, days: int = 7) -> List[Dict]:
+        return get_recent_public_job_listings(days)
 
