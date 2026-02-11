@@ -78,73 +78,118 @@ async def tailor_resume_for_job(job_id: str, background_tasks: BackgroundTasks =
     Tailor resume and generate cover email for a job.
     Uses the multi-agent pipeline (recruiter -> writer -> critic).
     """
-    import logging
-    logger = logging.getLogger("tailor_resume")
-    logger.setLevel(logging.DEBUG)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    if not logger.hasHandlers():
-        logger.addHandler(handler)
+    print(f"\n🚀 DEBUG: Starting tailor process for Job ID: {job_id}")
 
+    # 1. Fetch Job
     job = db.get_job_application(job_id)
     if not job:
-        logger.error("Job not found for job_id=%s", job_id)
+        print("❌ DEBUG: Job not found in DB")
         raise HTTPException(status_code=404, detail="Job not found")
     
+    print(f"✅ DEBUG: Found Job: {job.get('job_title')} at {job.get('company')}")
+
+    # 2. Fetch Profile
     profile = db.get_profile(job["user_id"])
     if not profile:
-        logger.error("User profile not found for user_id=%s", job.get("user_id"))
+        print(f"❌ DEBUG: Profile not found for User ID: {job.get('user_id')}")
         raise HTTPException(status_code=404, detail="User profile not found")
-    
-    # Get job description
+
+    # 3. Get Job Description
     jd = job.get("job_description") or job.get("jd_analysis", {}).get("raw_jd", "")
     if not jd:
-        logger.error("Job description missing for job_id=%s", job_id)
+        print("❌ DEBUG: Job Description is MISSING")
         raise HTTPException(
             status_code=400, 
             detail="Job description required. Update job with job_description first."
         )
+    print(f"✅ DEBUG: Job Description found ({len(jd)} chars)")
+
+    # ==========================================================
+    # 4. Get Resume Data (UPDATED LOGIC STARTS HERE)
+    # ==========================================================
+    raw_text = profile.get("raw_resume_text", "")
+    resume_data = str(profile.get("resume_data", ""))
+    parsed_resume = str(profile.get("parsed_resume", ""))
+
+    print(f"🔍 DEBUG PROFILE DATA:")
+    print(f" - raw_resume_text: '{str(raw_text)[:50]}...' (len: {len(str(raw_text))})")
+    print(f" - resume_data: (len: {len(resume_data)})")
+    print(f" - parsed_resume: (len: {len(parsed_resume)})")
+
+    # LOGIC FIX: Don't accept text if it is too short (likely a placeholder)
+    resume_text = ""
     
-    # Get resume data
-    resume_text = profile.get("raw_resume_text", "")
-    if not resume_text and profile.get("resume_data"):
-        resume_text = str(profile["resume_data"])
-    # Fallback: use parsed_resume if present
-    if not resume_text and profile.get("parsed_resume"):
-        parsed = profile["parsed_resume"]
-        resume_text = parsed if isinstance(parsed, dict) else str(parsed)
-    logger.debug("Resume text type: %s, value: %s", type(resume_text), str(resume_text)[:200])
-    if not resume_text:
-        logger.error("Resume not found for user_id=%s", job.get("user_id"))
-        raise HTTPException(status_code=400, detail="Resume not found. Upload resume first.")
+    if raw_text and len(str(raw_text)) > 50:
+        resume_text = raw_text
+        print("✅ Using 'raw_resume_text'")
+    elif len(parsed_resume) > 50:
+        resume_text = parsed_resume
+        print("✅ Using 'parsed_resume'")
+    elif len(resume_data) > 50:
+        resume_text = resume_data
+        print("✅ Using 'resume_data'")
+    else:
+        # Fallback to whatever we have, even if short, to show the error
+        resume_text = raw_text or parsed_resume or resume_data
+
+    if not resume_text or len(str(resume_text)) < 20:
+        print(f"❌ DEBUG: Resume text is dangerously short: '{resume_text}'")
+        raise HTTPException(status_code=400, detail="Resume content is empty or too short. Please re-upload your resume.")
     
-    # Run tailoring pipeline
+    print(f"✅ DEBUG: Final Resume text selected ({len(str(resume_text))} chars)")
+    # ==========================================================
+    # (UPDATED LOGIC ENDS HERE)
+    # ==========================================================
+
+    # 5. Run Tailoring Pipeline
     try:
-        tailor_service = ResumeTailorService(profile=resume_text)
-        logger.debug("Starting JD analysis")
+        print("🔄 DEBUG: Initializing ResumeTailorService...")
+        
+        # 👇 FIX: Wrap the text in a dict so the service doesn't crash
+        # The service expects a dict with 'parsed_resume' or 'raw_resume_text'
+        profile_wrapper = {"parsed_resume": resume_text} 
+        
+        tailor_service = ResumeTailorService(profile=profile_wrapper)
+        
+        print("🔄 DEBUG: Running analyze_jd...")
         jd_analysis = await tailor_service.analyze_jd(jd)
-        logger.debug("JD analysis complete")
-        logger.debug("Starting resume tailoring")
-        # Use the class's tailor method, which expects job_description and uses self.profile
+        print("✅ DEBUG: JD Analysis complete")
+
+        print("🔄 DEBUG: Running tailor...")
         tailor_result = await tailor_service.tailor(jd)
-        logger.debug("Resume tailoring complete")
-        logger.debug("Starting cover email generation")
-        # tailor returns (jd_analysis, tailored_resume, final_score)
+
+        # Unpack result
         jd_analysis2, tailored_resume, final_score = tailor_result
+
+        print("🔄 DEBUG: Running generate_email...")
         cover_email = await tailor_service.generate_email(jd_analysis=jd_analysis2, tailored_resume=tailored_resume)
-        logger.debug("Cover email generation complete")
+        print("✅ DEBUG: Email generation complete")
+        
+        if not cover_email:
+            print("⚠️ DEBUG: Generated email is empty/None!")
+
     except Exception as e:
-        logger.exception("Error during tailoring pipeline: %s", e)
+        print(f"🔥 DEBUG CRITICAL ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Tailoring pipeline failed: {e}")
-    
-    # Update job with tailored content
+
+    # 6. Update Database
     update_data = {
         "status": "tailored",
         "jd_analysis": jd_analysis2,
         "tailored_resume": tailored_resume,
-        "cover_letter": cover_email
+        "cover_email": cover_email  # Ensure this matches your DB column (we fixed this previously)
     }
-    db.client.table("job_applications").update(update_data).eq("id", job_id).execute()
+
+    print(f"🔄 DEBUG: Updating DB with keys: {list(update_data.keys())}")
+    
+    try:
+        db.client.table("job_applications").update(update_data).eq("id", job_id).execute()
+        print("✅ DEBUG: DB Update Successful")
+    except Exception as db_e:
+        print(f"🔥 DEBUG DB ERROR: {str(db_e)}")
+        raise HTTPException(status_code=500, detail=f"Database update failed: {db_e}")
     
     return {
         "message": "Resume tailored successfully",
@@ -230,24 +275,32 @@ async def create_gmail_draft(job_id: str, draft: GmailDraftCreate = None):
         )
     
     # Get or compute email content
+    # Get or compute email content
     if draft:
         to_email = draft.to_email
         subject = draft.subject
         body = draft.body
     else:
-        to_email = job.get("application_email") or job.get("contact_email")
+        # Check all possible email fields
+        to_email = job.get("application_email") or job.get("contact_email") or job.get("company_email")
         if not to_email:
             raise HTTPException(
                 status_code=400, 
                 detail="No recipient email. Provide to_email in request or update job with application_email."
             )
         
-        company = job.get("company_name", "the company")
-        title = job.get("job_title", "the position")
+        company = job.get("company_name") or job.get("company") or "the company"
+        title = job.get("job_title") or job.get("title") or "the position"
         
         subject = f"Application for {title} at {company} - {profile.get('full_name', '')}"
-        body = job.get("cover_letter", "")
         
+        # 👇 FIXED: Retrieve from 'cover_email' instead of 'cover_letter'
+        body = job.get("cover_email", "")
+        
+        # Fallback check
+        if not body:
+             body = job.get("cover_letter", "")
+
         if not body:
             raise HTTPException(
                 status_code=400, 
@@ -419,7 +472,10 @@ async def save_public_job_to_profile(
         "company": data.get("company"),    # Changed from company_name to company to match schema
         "job_description": data.get("description"),
         "location": data.get("location"),
-        "contact_email": data.get("contact_email"), # Changed to likely schema match
+        
+        # 👇 FIX: Map 'contact_email' (from public job) to 'company_email' (job_applications table)
+        "company_email": data.get("contact_email"), 
+        
         "job_url": data.get("source_url"), # Changed from source_url to job_url
         "status": "scouted",
         "match_score": 0,

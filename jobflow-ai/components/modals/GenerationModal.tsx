@@ -1,31 +1,62 @@
 import React, { useState } from 'react';
 import { Layers, X, FileText, AlertCircle, Send, CheckCircle } from 'lucide-react';
-import { Job, UserProfile, Application, AppStatus } from '../../types';
-import { generateCoverLetter } from '../../geminiService';
 
 export const GenerationModal = ({ job, user, onClose, onComplete }: {
-    job: Job;
-    user: UserProfile;
+    job: any; 
+    user: any;
     onClose: () => void;
-    onComplete: (app: Application) => void
+    onComplete: (app: any) => void
 }) => {
     const [generating, setGenerating] = useState(false);
     const [coverLetter, setCoverLetter] = useState('');
+    const [analysis, setAnalysis] = useState<any>(null); // Store backend analysis
     const [step, setStep] = useState<'initial' | 'review'>('initial');
 
     const handleGenerate = async () => {
         setGenerating(true);
-        const letter = await generateCoverLetter(job, user);
-        setCoverLetter(letter);
-        setGenerating(false);
-        setStep('review');
+        try {
+            console.log(`🚀 Sending request to backend for Job ID: ${job.id}`);
+            
+            const response = await fetch(`http://localhost:8000/api/jobs/${job.id}/tailor`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.detail || 'Backend failed to tailor resume');
+            }
+
+            const data = await response.json();
+            console.log("✅ Backend Response:", data);
+
+            // 1. Set the Cover Letter Content
+            const content = data.cover_email || data.cover_letter || "No content returned.";
+            setCoverLetter(content);
+
+            // 2. Set Analysis Data (Skills found)
+            if (data.jd_analysis) {
+                setAnalysis(data.jd_analysis);
+            }
+
+            setStep('review');
+
+        } catch (error: any) {
+            console.error("❌ Generation Error:", error);
+            setCoverLetter(`Error generating content: ${error.message}`);
+            setStep('review');
+        } finally {
+            setGenerating(false);
+        }
     };
 
     const handleFinish = () => {
-        const newApp: Application = {
+        const newApp = {
             id: `a${Math.random().toString(36).substr(2, 9)}`,
             jobId: job.id,
-            status: AppStatus.SENT,
+            status: 'sent',
             appliedDate: new Date().toISOString().split('T')[0],
             createdDate: new Date().toISOString().split('T')[0],
             lastUpdated: new Date().toISOString().split('T')[0],
@@ -34,6 +65,12 @@ export const GenerationModal = ({ job, user, onClose, onComplete }: {
         };
         onComplete(newApp);
     };
+
+    const displayTitle = job.position || job.job_title || "Unknown Role";
+    const displayCompany = job.company || job.company_name || "Unknown Company";
+
+    // Dynamic skills display (defaults to mock if not yet analyzed)
+    const matchingSkills = analysis?.hard_skills?.slice(0, 3) || user.skills?.slice(0, 2).map((s: any) => s.name) || ["React", "TypeScript"];
 
     return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-6 z-[200] animate-in fade-in duration-300">
@@ -45,7 +82,9 @@ export const GenerationModal = ({ job, user, onClose, onComplete }: {
                         </div>
                         <div>
                             <h3 className="text-xl font-bold text-slate-800">Application Builder</h3>
-                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{job.company} • {job.position}</p>
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                                {displayCompany} • {displayTitle}
+                            </p>
                         </div>
                     </div>
                     <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-xl transition-all">
@@ -62,17 +101,20 @@ export const GenerationModal = ({ job, user, onClose, onComplete }: {
                             <div className="max-w-md mx-auto">
                                 <h4 className="text-2xl font-bold text-slate-800 mb-4">Tailor Your Application</h4>
                                 <p className="text-slate-500 leading-relaxed">
-                                    Our AI will analyze your profile and the requirements for <span className="font-bold text-slate-700">{job.position}</span> to create a highly personalized cover letter.
+                                    Our AI will analyze your profile and the requirements for <span className="font-bold text-slate-700">{displayTitle}</span> to create a highly personalized cover letter.
                                 </p>
                             </div>
+                            
+                            {/* This is the part that says "We noticed..." */}
                             <div className="bg-blue-50/50 p-6 rounded-[32px] border border-blue-100 flex items-start gap-4 text-left">
                                 <div className="p-2 bg-blue-600 rounded-lg text-white mt-1">
                                     <AlertCircle size={16} />
                                 </div>
                                 <p className="text-sm text-blue-800 font-medium">
-                                    We noticed your experience with <strong>React</strong> and <strong>TypeScript</strong> perfectly aligns with this role's core requirements.
+                                    We will highlight your experience with <strong>{matchingSkills.join(', ')}</strong> to align with this role's requirements.
                                 </p>
                             </div>
+
                             <button
                                 onClick={handleGenerate}
                                 disabled={generating}
@@ -98,6 +140,7 @@ export const GenerationModal = ({ job, user, onClose, onComplete }: {
                                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">AI Generated Cover Letter</label>
                                     <button className="text-xs font-bold text-blue-600 hover:underline">Edit Content</button>
                                 </div>
+                                {/* Display the generated content here */}
                                 <div className="w-full p-6 bg-slate-50 border border-slate-200 rounded-[24px] text-slate-600 text-sm leading-relaxed max-h-[300px] overflow-y-auto whitespace-pre-wrap custom-scrollbar">
                                     {coverLetter}
                                 </div>

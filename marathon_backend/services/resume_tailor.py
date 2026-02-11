@@ -4,7 +4,7 @@ Combines: Recruiter Agent (analysis) + Writer Agent (drafting) + Critic Agent (r
 """
 import json
 import re
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Union
 from dotenv import load_dotenv
 from .gemini_client import call_gemini
 
@@ -19,19 +19,15 @@ def extract_json(text: str) -> Dict:
     Aggressively hunts for JSON objects in a string, ignoring markdown,
     conversation, and formatting errors.
     """
-    # 1. Fast path: Direct load
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 2. Extract content between first { and last }
-    # This handles "Here is your JSON: { ... }"
     start = text.find('{')
     end = text.rfind('}')
     
     if start == -1 or end == -1:
-        # Fallback: Check for markdown code blocks if {} not found (rare for JSON)
         pattern = r"```(?:json)?\s*(.*?)\s*```"
         match = re.search(pattern, text, re.DOTALL)
         if match:
@@ -44,29 +40,17 @@ def extract_json(text: str) -> Dict:
     else:
         raise ValueError("No JSON braces found in response")
 
-    # 3. Clean and Parse
     try:
-        # Instead of deleting control chars: escape newlines inside strings
-        # json.loads fails on literal newlines in strings, but allows \n outside
-        # We'll just try to parse first.
-        # If that fails, we can try to escape newlines if they seem to be the issue
-        # Use regex to find unescaped control characters in string values? Risky.
-        # Safer: Just remove dangerous non-printable chars (0x00-0x1F) EXCEPT 
-        # newline (0xA), carriage return (0xD), and tab (0x9)
         json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', json_str)
-        # Also clean up potential trailing commas (common LLM error)
         json_str = re.sub(r",\s*}", "}", json_str)
         json_str = re.sub(r",\s*]", "]", json_str)
         return json.loads(json_str, strict=False)
     except json.JSONDecodeError:
-        # 4. Fallback: Try a more aggressive cleanup
         try:
-             # Last resort: escaped newlines?
              json_str = json_str.replace('\n', '\\n').replace('\r', '').replace('\t', '\\t')
              return json.loads(json_str, strict=False)
         except:
-            print(f"❌ Unfixable JSON: {json_str[:500]}...")  # Increased log length
-            print(f"DEBUG RAW: {json_str}")
+            print(f"❌ Unfixable JSON: {json_str[:500]}...")
             raise ValueError("Fatal JSON parsing error")
 
 
@@ -95,9 +79,6 @@ Return ONLY raw JSON.
         return extract_json(text)
     except Exception as e:
         print(f"❌ JD Analysis failed: {e}")
-        # DEBUG: Print the raw text to understand why it failed
-        print(f"DEBUG: Raw response text: {text[:500]}..." if 'text' in locals() else "DEBUG: No text variable")
-        # Return safe fallback to prevent downstream 422 errors
         return {
             "company_name": "Hiring Company",
             "job_title": "Applicant",
@@ -119,7 +100,6 @@ async def draft_resume(
 ) -> Optional[Dict]:
     """Draft a tailored resume in JSON format."""
     
-    # Safety check: If feedback was a system error, ignore it so we don't confuse the LLM
     if "JSON Parsing failed" in feedback or "Review error" in feedback:
         feedback = "Ensure the output is valid JSON format."
 
@@ -157,13 +137,10 @@ OUTPUT STRUCTURE:
 """
 
     try:
-        # Increase max tokens to prevent truncated JSON
         text = call_gemini(user_prompt, system=system_prompt, max_tokens=8192, temperature=0.4)
         return extract_json(text)
     except Exception as e:
         print(f"❌ Resume drafting failed: {e}")
-        # Retry once with higher temperature/more leniency if strictly needed, 
-        # but for now let's just return None to trigger the loop fallback
         return None
 
 
@@ -196,8 +173,6 @@ Return JSON ONLY:
         return review.get("score", 70), review.get("critique", "Good match.")
     except Exception as e:
         print(f"❌ Resume review failed: {e}")
-        # If review fails, do NOT return 0. It ruins the loop. 
-        # Return a neutral score to keep the process alive or accept the draft.
         return 80, "Review system timeout. Proceeding with current draft."
 
 
@@ -206,15 +181,20 @@ Return JSON ONLY:
 # ============================================
 
 async def tailor_resume_for_job(
-    profile: Dict,
+    profile: Union[Dict, str],
     portfolio: Dict,
     job_description: str,
     max_iterations: int,
     quality_threshold: int
 ) -> Tuple[Dict, Dict, int]:
     """
-    Full pipeline with 'Best Draft' tracking to ensure we never return None/422.
+    Full pipeline with 'Best Draft' tracking.
     """
+    # Robustness Fix: Handle if profile is passed as a raw string
+    if isinstance(profile, str):
+        # Wrap it so agents can handle it
+        profile = {"parsed_resume": profile}
+
     print("🕵️ Analyzing job description...")
     jd_analysis = await analyze_job_description(job_description)
     
@@ -225,8 +205,8 @@ async def tailor_resume_for_job(
     best_draft = None
     best_score = -1
 
-    # Initialize best_draft with parsed resume as fallback if everything fails
-    if profile.get('parsed_resume'):
+    # Initialize best_draft with parsed resume as fallback
+    if isinstance(profile, dict) and profile.get('parsed_resume'):
         best_draft = profile.get('parsed_resume')
 
     for iteration in range(max_iterations):
@@ -235,7 +215,6 @@ async def tailor_resume_for_job(
         # Draft
         new_draft = await draft_resume(profile, portfolio, jd_analysis, feedback)
         
-        # Validation: If draft failed, abort loop and use best so far
         if not new_draft:
             print("❌ Failed to generate draft. Using best available version.")
             break
@@ -252,9 +231,8 @@ async def tailor_resume_for_job(
         if score > best_score:
             best_score = score
             best_draft = current_draft
-            # Ensure specifically required fields for PDF generation exist
+            # Ensure specifically required fields exist
             if 'personal_info' not in best_draft: best_draft['personal_info'] = {}
-            if 'experience' not in best_draft: best_draft['experience'] = []
 
         # Threshold check
         if score >= quality_threshold:
@@ -266,7 +244,7 @@ async def tailor_resume_for_job(
     # FINAL SAFETY CHECK
     if not best_draft:
         print("⚠️ No valid draft generated. Returning raw profile.")
-        best_draft = profile.get('parsed_resume', {})
+        best_draft = profile.get('parsed_resume', {}) if isinstance(profile, dict) else {}
         
     return jd_analysis, best_draft, best_score
 
@@ -277,19 +255,41 @@ async def tailor_resume_for_job(
 
 async def generate_cover_email(tailored_resume: Dict, jd_analysis: Dict, profile: Dict) -> str:
     """Generate email."""
+    # 1. Extract Details from the Tailored Resume (Preferred source)
+    personal = tailored_resume.get('personal_info', {})
+    
+    # 2. Fallback to Profile data if Resume is empty
+    candidate_name = personal.get('name') or profile.get('full_name') or "Candidate"
+    candidate_email = personal.get('email') or profile.get('email') or ""
+    candidate_phone = personal.get('phone') or profile.get('phone') or ""
+    
+    job_title = jd_analysis.get('job_title', 'the role')
+    company = jd_analysis.get('company_name', 'your company')
+    
     try:
-        prompt = f"""Write a short job application email for {jd_analysis.get('job_title', 'the role')} at {jd_analysis.get('company_name', 'your company')}.
-        Candidate: {profile.get('full_name')}
-        Highlights: {len(tailored_resume.get('experience', []))} years experience.
+        prompt = f"""
+        Write a professional, concise, and enthusiastic job application email.
+        
+        CONTEXT:
+        - Role: {job_title}
+        - Company: {company}
+        - Candidate Name: {candidate_name}
+        - Candidate Email: {candidate_email}
+        - Candidate Phone: {candidate_phone}
+        - Highlights: {len(tailored_resume.get('experience', []))} years of relevant experience.
+
+        INSTRUCTIONS:
+        1. Keep it short (under 200 words).
+        2. Highlight specific technical skills mentioned in the resume.
+        3. STRICT REQUIREMENT: Sign off using the Candidate Name provided above. 
+        4. DO NOT use placeholders like "[Your Name]" or "[Phone Number]". If data is missing, just omit that line.
+        5. Include a professional Subject line at the very top.
         """
         return call_gemini(prompt, max_tokens=1024, temperature=0.7)
-    except:
-        return f"Dear Hiring Team,\n\nI am applying for the position of {jd_analysis.get('job_title')}. Please find my resume attached.\n\nBest,\n{profile.get('full_name')}"
+    except Exception as e:
+        print(f"Email generation error: {e}")
+        return f"Subject: Application for {job_title}\n\nDear Hiring Team,\n\nI am writing to apply for the {job_title} position at {company}. Please find my resume attached.\n\nBest regards,\n\n{candidate_name}\n{candidate_email}"
 
-
-# ============================================
-# RESUME TAILOR SERVICE CLASS
-# ============================================
 
 # ============================================
 # RESUME TAILOR SERVICE CLASS
@@ -298,37 +298,19 @@ async def generate_cover_email(tailored_resume: Dict, jd_analysis: Dict, profile
 class ResumeTailorService:
     """
     Service class for resume tailoring operations.
-    Provides a unified interface for the complete tailoring pipeline.
     """
 
     def __init__(self, profile: Dict = None, portfolio: Dict = None):
-        """Initialize with optional profile and portfolio data."""
         self.profile = profile or {}
         self.portfolio = portfolio or {"projects": [], "repos": []}
         self.last_jd_analysis: Optional[Dict] = None
         self.last_tailored_resume: Optional[Dict] = None
         self.last_score: int = 0
 
-    def set_profile(self, profile: Dict):
-        """Update the profile data."""
-        self.profile = profile
-
-    def set_portfolio(self, portfolio: Dict):
-        """Update the portfolio data."""
-        self.portfolio = portfolio
-
     async def analyze_jd(self, job_description: str) -> Dict:
-        """
-        Analyze a job description.
-        This is the method your router is looking for.
-        """
         return await analyze_job_description(job_description)
 
     async def tailor(self, job_description: str, max_iterations: int = 3, quality_threshold: int = 85):
-        """
-        Run the full tailoring pipeline for a job description.
-        Returns: Tuple of (jd_analysis, tailored_resume, final_score)
-        """
         jd_analysis, tailored_resume, score = await tailor_resume_for_job(
             self.profile,
             self.portfolio,
@@ -344,18 +326,7 @@ class ResumeTailorService:
         return jd_analysis, tailored_resume, score
 
     async def generate_email(self, jd_analysis: Dict = None, tailored_resume: Dict = None) -> str:
-        """
-        Generate a cover email for the application.
-        """
         jd = jd_analysis or self.last_jd_analysis or {}
         resume = tailored_resume or self.last_tailored_resume or {}
         
         return await generate_cover_email(resume, jd, self.profile)
-
-    def get_last_results(self) -> Dict:
-        """Get the results from the last tailoring operation."""
-        return {
-            "jd_analysis": self.last_jd_analysis,
-            "tailored_resume": self.last_tailored_resume,
-            "score": self.last_score
-        }
