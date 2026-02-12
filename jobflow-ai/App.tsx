@@ -1,6 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircle, X } from 'lucide-react';
 import { ViewType, Application, Job, AppStatus } from './types';
+
+const PATH_TO_VIEW: Record<string, ViewType> = {
+  '/': 'dashboard',
+  '/dashboard': 'dashboard',
+  '/discovery': 'discovery',
+  '/applications': 'manager',
+  '/inbox': 'inbox',
+  '/profile': 'profile',
+  '/analytics': 'analytics',
+  '/settings': 'settings',
+};
 import { MOCK_APPLICATIONS, MOCK_USER } from './constants';
 
 // Layout Components
@@ -32,7 +44,9 @@ const App = () => {
     }
   }, []);
 
-  const [currentView, setView] = useState<ViewType>('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentView = useMemo(() => PATH_TO_VIEW[location.pathname] ?? 'dashboard', [location.pathname]);
   const [darkMode, setDarkMode] = useState(false); // Helper state for now, logic inside Header/Components needs to respect it if implemented fully
   const [apps, setApps] = useState<Application[]>(MOCK_APPLICATIONS);
   const [isApplying, setIsApplying] = useState<Job | null>(null);
@@ -62,7 +76,6 @@ const App = () => {
     <div className={`flex min-h-screen ${darkMode ? 'dark bg-slate-900 text-white' : 'bg-slate-50'}`}>
       <Sidebar
         currentView={currentView}
-        setView={setView}
         onLogout={() => {
           authService.logout();
           setIsAuthenticated(false);
@@ -73,7 +86,7 @@ const App = () => {
         <Header darkMode={darkMode} setDarkMode={setDarkMode} />
 
         <main className="flex-1 p-8 max-w-7xl mx-auto w-full overflow-x-hidden">
-          {currentView === 'dashboard' && <DashboardView apps={apps} onAdd={() => setView('discovery')} />}
+          {currentView === 'dashboard' && <DashboardView apps={apps} onAdd={() => navigate('/discovery')} />}
           {currentView === 'discovery' && <JobDiscoveryView onApply={(j) => setIsApplying(j)} />}
           {currentView === 'manager' && <ApplicationsView userId={userId} />}
           {currentView === 'profile' && <ProfileView userId={userId} />}

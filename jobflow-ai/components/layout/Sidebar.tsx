@@ -1,4 +1,5 @@
 import React from 'react';
+import { NavLink } from 'react-router-dom';
 import {
     LayoutDashboard,
     User,
@@ -11,7 +12,17 @@ import {
 } from 'lucide-react';
 import { ViewType } from '../../types';
 
-export const Sidebar = ({ currentView, setView, onLogout }: { currentView: ViewType; setView: (v: ViewType) => void, onLogout: () => void }) => {
+const VIEW_TO_PATH: Record<string, string> = {
+    dashboard: '/',
+    discovery: '/discovery',
+    manager: '/applications',
+    inbox: '/inbox',
+    profile: '/profile',
+    analytics: '/analytics',
+    settings: '/settings',
+};
+
+export const Sidebar = ({ currentView, onLogout }: { currentView: ViewType; onLogout: () => void }) => {
     const menuItems = [
         { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
         { id: 'discovery', icon: Search, label: 'Job Discovery' },
@@ -30,13 +41,16 @@ export const Sidebar = ({ currentView, setView, onLogout }: { currentView: ViewT
             </div>
             <nav className="flex-1 px-4 py-4 space-y-1">
                 {menuItems.map((item) => (
-                    <button
+                    <NavLink
                         key={item.id}
-                        onClick={() => setView(item.id as ViewType)}
-                        className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${currentView === item.id
+                        to={VIEW_TO_PATH[item.id] ?? '/'}
+                        end={item.id === 'dashboard'}
+                        className={({ isActive }) =>
+                            `w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all ${isActive
                                 ? 'bg-blue-50 text-blue-600 font-medium'
                                 : 'text-slate-500 hover:bg-slate-50'
-                            }`}
+                            }`
+                        }
                     >
                         <div className="flex items-center gap-3">
                             <item.icon size={20} />
@@ -47,7 +61,7 @@ export const Sidebar = ({ currentView, setView, onLogout }: { currentView: ViewT
                                 {item.badge}
                             </span>
                         )}
-                    </button>
+                    </NavLink>
                 ))}
             </nav>
             <div className="p-4 mt-auto">
