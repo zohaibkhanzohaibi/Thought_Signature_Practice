@@ -1,0 +1,203 @@
+%-------------------------
+% Resume in LaTeX - ATS Optimized
+% Based on Jake Gutierrez's template
+% Customized for Marathon Job Agent
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+
+%----------FONT OPTIONS----------
+% sans-serif
+% \usepackage[sfdefault]{FiraSans}
+% \usepackage[sfdefault]{roboto}
+% \usepackage[sfdefault]{noto-sans}
+% \usepackage[default]{sourcesanspro}
+
+% serif
+% \usepackage{CormorantGaramond}
+% \usepackage{charter}
+
+
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Ensure that generated pdf is machine readable/ATS parsable
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Musab Umair} \\ \vspace{1pt}
+    \small +923332151077 $|$ \href{mailto:musab712003@gmail.com}{\underline{musab712003@gmail.com}} $|$ 
+    \href{https://www.linkedin.com/in/musab-umair1}{\underline{LinkedIn}} $|$
+    \href{https://github.com/Musab712}{\underline{GitHub}}
+\end{center}
+
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+        \resumeSubheading
+      {NED University of Engineering \& Technology}{}
+      {Bachelor of Science in Computer Science}{October 2022 - June 2026}
+        \resumeSubheading
+      {Highbrow College}{}
+      {Cambridge Education O/A Levels (Computer Science)}{June 2018 - June 2022}
+      \resumeSubHeadingListEnd
+
+
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
+        \resumeSubheading
+      {SayntAI}{Pakisatn}
+      {AI Automation Engineer}{August 2025 - October 2025}
+      \resumeItemListStart
+                \resumeItem{Architected and implemented AI automation workflows using CrewAI, LangGraph, and AutoGen to enhance creative and operational efficiency.}
+                \resumeItem{Developed intelligent pipelines for automated logo generation and brand identity creation, streamlining design processes.}
+                \resumeItem{Designed and deployed agentic systems to automate content creation and optimize AI-driven workflows, reducing manual effort and improving output.}
+              \resumeItemListEnd
+        \resumeSubheading
+      {Karachi Development Authority}{}
+      {IT Assistant}{March 2025 - April 2025}
+      \resumeItemListStart
+                \resumeItem{Assisted in maintaining critical IT infrastructure to ensure system efficiency and continuous uptime for government operations.}
+                \resumeItem{Managed and updated digital records within database systems, improving data organization and accessibility for team members.}
+                \resumeItem{Collaborated with the IT team to document system processes and implement improvements, contributing to operational best practices and knowledge sharing.}
+              \resumeItemListEnd
+      \resumeSubHeadingListEnd
+
+
+%-----------PROJECTS-----------
+\section{Projects}
+    \resumeSubHeadingListStart
+            \resumeProjectHeading
+          {\textbf{Autonomous E-commerce Fulfillment System} $|$ \emph{n8n, PostgreSQL, Slack}}{}
+          \resumeItemListStart
+                        \resumeItem{Engineered a robust, 24/7 automation system using n8n to manage e-commerce orders from webhook trigger to shipping notification, ensuring continuous operation.}
+                        \resumeItem{Designed a two-loop system in n8n to validate inventory against a PostgreSQL database before committing to fulfillment, significantly reducing out-of-stock errors.}
+                        \resumeItem{Implemented an automated failure path that halts out-of-stock orders and instantly alerts the team on Slack, minimizing customer dissatisfaction and manual intervention.}
+                      \resumeItemListEnd
+            \resumeProjectHeading
+          {\textbf{AI Social Media Content Manager} $|$ \emph{n8n, Google Gemini, OpenAI DALL-E}}{}
+          \resumeItemListStart
+                        \resumeItem{Architected an autonomous workflow using n8n to research, write platform-specific content, and generate custom images for social media, streamlining content creation.}
+                        \resumeItem{Orchestrated Google Gemini agents for content generation, SerpAPI for web research, and OpenAI DALL-E for image creation, integrating multiple APIs for comprehensive automation.}
+                        \resumeItem{Implemented a "Human-in-the-Loop" (HITL) Gmail approval system with a content regeneration loop, ensuring quality control and brand alignment before publishing.}
+                      \resumeItemListEnd
+            \resumeProjectHeading
+          {\textbf{Lead Generation and Enrichment} $|$ \emph{n8n, Apify, Airtable}}{}
+          \resumeItemListStart
+                        \resumeItem{Developed an automated lead generation system using n8n and Apify to scrape Google Maps leads based on user-defined criteria (industry/location), increasing lead volume.}
+                        \resumeItem{Automatically extracted and cleaned key contact information (Email, Phone, LinkedIn) within n8n, ensuring data integrity and readiness for outreach.}
+                        \resumeItem{Filtered scraped leads to process only those with valid email addresses, enhancing lead quality and conversion potential by focusing efforts on viable prospects.}
+                        \resumeItem{Populated verified lead data into a designated Airtable base, establishing a structured CRM for efficient management and follow-up.}
+                      \resumeItemListEnd
+            \resumeProjectHeading
+          {\textbf{MCP Server for Expense Tracker} $|$ \emph{PostgreSQL, FastAPI}}{}
+          \resumeItemListStart
+                        \resumeItem{Built an MCP-based server with robust API endpoints to add, update, delete, and summarize expense data, providing comprehensive financial management capabilities.}
+                        \resumeItem{Integrated a PostgreSQL database for persistent storage and efficient retrieval of financial records, ensuring data reliability and scalability.}
+                        \resumeItem{Implemented summarization logic to automatically generate weekly and monthly financial insights, aiding in proactive budget management and financial planning.}
+                      \resumeItemListEnd
+            \resumeProjectHeading
+          {\textbf{AI PDF Chatbot using LangChain} $|$ \emph{OpenAI, FAISS}}{}
+          \resumeItemListStart
+                        \resumeItem{Developed an AI-powered chatbot that enables users to upload and query PDFs interactively, enhancing information access and user experience.}
+                        \resumeItem{Integrated OpenAI APIs for advanced language understanding and utilized FAISS for efficient document retrieval, ensuring accurate and contextually relevant responses.}
+                        \resumeItem{Created a seamless user experience for contextual question answering over uploaded documents, improving user engagement and self-service capabilities.}
+                      \resumeItemListEnd
+          \resumeSubHeadingListEnd
+
+
+%-----------PROGRAMMING SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+           \textbf{AI \& Automation Platforms}{: n8n, make.com, LangChain, LangGraph, CrewAI, AutoGen, OpenAI, Google Gemini, Claude} \\
+           \textbf{Backend Development}{: API design and management, PostgreSQL, FastAPI, Airtable} \\
+           \textbf{Workflow \& Process Automation}{: Workflow Automation, Process optimization \& automation strategy, Prompt Engineering, Agentic AI development, LLM processing} \\
+           \textbf{Tools \& Libraries}{: Apify, FAISS, Google Sheets automation} \\
+         }}
+ \end{itemize}
+%-------------------------------------------
+\end{document}

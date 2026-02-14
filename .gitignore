@@ -33,3 +33,5 @@ wheels/
 .vscode/
 *.swp
 *.swo
+
+credentials.json
