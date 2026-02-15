@@ -252,12 +252,10 @@ async def generate_pdf(job_id: str):
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
 
+# Inside jobs.py -> create_gmail_draft endpoint
+
 @router.post("/{job_id}/create-draft")
 async def create_gmail_draft(job_id: str, draft: GmailDraftCreate = None):
-    """
-    Create a Gmail draft for this job application.
-    Uses tailored cover letter as email body.
-    """
     job = db.get_job_application(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -266,49 +264,48 @@ async def create_gmail_draft(job_id: str, draft: GmailDraftCreate = None):
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    # Get Gmail tokens
     tokens = db.get_gmail_tokens(job["user_id"])
     if not tokens:
-        raise HTTPException(
-            status_code=400, 
-            detail="Gmail not connected. Visit /api/gmail/auth to authenticate."
-        )
+        raise HTTPException(status_code=400, detail="Gmail not connected. Visit /api/gmail/auth to authenticate.")
     
-    # Get or compute email content
-    # Get or compute email content
+    # 1. Map properties properly
     if draft:
-        to_email = draft.to_email
+        to_email = draft.to  # 👇 FIX: Changed from draft.to_email
         subject = draft.subject
         body = draft.body
     else:
-        # Check all possible email fields
         to_email = job.get("application_email") or job.get("contact_email") or job.get("company_email")
         if not to_email:
-            raise HTTPException(
-                status_code=400, 
-                detail="No recipient email. Provide to_email in request or update job with application_email."
-            )
+            raise HTTPException(status_code=400, detail="No recipient email found.")
         
+        body = job.get("cover_email", "") or job.get("cover_letter", "")
+        if not body:
+            raise HTTPException(status_code=400, detail="Cover letter not generated. Call /tailor first.")
+
         company = job.get("company_name") or job.get("company") or "the company"
         title = job.get("job_title") or job.get("title") or "the position"
-        
         subject = f"Application for {title} at {company} - {profile.get('full_name', '')}"
-        
-        # 👇 FIXED: Retrieve from 'cover_email' instead of 'cover_letter'
-        body = job.get("cover_email", "")
-        
-        # Fallback check
-        if not body:
-             body = job.get("cover_letter", "")
 
-        if not body:
-            raise HTTPException(
-                status_code=400, 
-                detail="Cover letter not generated. Call /tailor first."
-            )
-    
-    # Create Gmail draft
+    # 2. Extract Subject Line from AI's body
+    body_text = body.strip()
+    if body_text.lower().startswith("subject:"):
+        parts = body_text.split("\n", 1)
+        subject = parts[0][8:].strip()
+        body = parts[1].strip() if len(parts) > 1 else body
+    elif body_text.lower().startswith("**subject:**"):
+        parts = body_text.split("\n", 1)
+        subject = parts[0][12:].strip()
+        body = parts[1].strip() if len(parts) > 1 else body
+
+    # 3. Create Gmail draft
     gmail = GmailService(tokens)
+    
+    existing_draft_id = job.get("gmail_draft_id")
+    if existing_draft_id:
+        try:
+            gmail.delete_draft(existing_draft_id)
+        except Exception:
+            pass
     
     attachment = job.get("resume_pdf_path")
     draft_id = gmail.create_draft(
@@ -321,15 +318,8 @@ async def create_gmail_draft(job_id: str, draft: GmailDraftCreate = None):
     # Update job with draft info
     db.client.table("job_applications").update({
         "gmail_draft_id": draft_id,
-        "status": "draft_created"
+        "status": "drafted"
     }).eq("id", job_id).execute()
-    
-    # Update tokens in case they were refreshed
-    db.save_gmail_tokens(
-        user_id=job["user_id"],
-        email=gmail.email_address,
-        tokens=gmail.get_updated_tokens()
-    )
     
     return {
         "message": "Gmail draft created",

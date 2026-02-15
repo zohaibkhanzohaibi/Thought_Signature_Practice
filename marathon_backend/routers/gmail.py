@@ -186,17 +186,19 @@ async def list_drafts(user_id: str, limit: int = 10):
             try:
                 draft = gmail.get_draft(d["id"])
                 msg = draft["message"]
-                headers = {h['name']: h['value'] for h in msg["payload"].get("headers", [])}
-                # Extract body (reuse _get_body from GmailService)
+                
+                # 👇 FIX: Force all header keys to lowercase
+                headers = {h['name'].lower(): h['value'] for h in msg["payload"].get("headers", [])}
                 body = gmail._get_body(msg["payload"])
+                
                 parsed_drafts.append({
                     "id": d["id"],
-                    "subject": headers.get("Subject", ""),
-                    "to": headers.get("To", ""),
+                    "subject": headers.get("subject", ""),
+                    "to": headers.get("to", ""),
                     "body": body,
                     "timestamp": msg.get("internalDate", ""),
                     "snippet": msg.get("snippet", ""),
-                    "is_reply": "In-Reply-To" in headers or "References" in headers
+                    "is_reply": "in-reply-to" in headers or "references" in headers
                 })
             except Exception as e:
                 print(f"Failed to parse draft {d['id']}: {e}")
@@ -484,9 +486,15 @@ async def generate_reply_for_email(user_id: str, message_id: str, create_draft: 
 @router.post("/send")
 async def send_email(request: SendEmailRequest):
     """Send email through Gmail (creates and sends a draft)."""
+    
+    # 👇 FIX: Catch empty recipients immediately to prevent 500 errors
+    if not request.to:
+        raise HTTPException(status_code=400, detail="Recipient address (To) is missing.")
+        
     tokens = db.get_gmail_tokens(request.user_id)
     if not tokens:
         raise HTTPException(status_code=400, detail="Gmail not connected")
+        
     gmail = GmailService(tokens)
     draft_id = gmail.create_draft(
         to=request.to,
@@ -535,16 +543,19 @@ async def delete_draft(user_id: str, draft_id: str):
             try:
                 draft = gmail.get_draft(d["id"])
                 msg = draft["message"]
-                headers = {h['name']: h['value'] for h in msg["payload"].get("headers", [])}
+                
+                # 👇 FIX: Force all header keys to lowercase
+                headers = {h['name'].lower(): h['value'] for h in msg["payload"].get("headers", [])}
                 body = gmail._get_body(msg["payload"])
+                
                 parsed_drafts.append({
                     "id": d["id"],
-                    "subject": headers.get("Subject", ""),
-                    "to": headers.get("To", ""),
+                    "subject": headers.get("subject", ""),
+                    "to": headers.get("to", ""),
                     "body": body,
                     "timestamp": msg.get("internalDate", ""),
                     "snippet": msg.get("snippet", ""),
-                    "is_reply": "In-Reply-To" in headers or "References" in headers
+                    "is_reply": "in-reply-to" in headers or "references" in headers
                 })
             except Exception:
                 continue

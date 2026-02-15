@@ -68,6 +68,7 @@ Extract the following into structured JSON:
 3. "hard_skills": List of technical skills
 4. "soft_skills": List of soft skills
 5. "experience_level": junior/mid/senior
+6. "special_instructions": Any specific instructions for applying (e.g., "Use subject line XYZ", "Include portfolio link"). If none, put "None".
 
 --- JOB DESCRIPTION ---
 {jd_text}
@@ -84,7 +85,8 @@ Return ONLY raw JSON.
             "job_title": "Applicant",
             "hard_skills": ["Python", "Communication"],
             "soft_skills": [],
-            "experience_level": "mid"
+            "experience_level": "mid",
+            "special_instructions": "None"
         }
 
 
@@ -255,41 +257,73 @@ async def tailor_resume_for_job(
 
 async def generate_cover_email(tailored_resume: Dict, jd_analysis: Dict, profile: Dict) -> str:
     """Generate email."""
-    # 1. Extract Details from the Tailored Resume (Preferred source)
-    personal = tailored_resume.get('personal_info', {})
+    print("✉️ [Writer Agent] Drafting cover email...")
     
-    # 2. Fallback to Profile data if Resume is empty
+    personal = tailored_resume.get('personal_info', {})
     candidate_name = personal.get('name') or profile.get('full_name') or "Candidate"
     candidate_email = personal.get('email') or profile.get('email') or ""
     candidate_phone = personal.get('phone') or profile.get('phone') or ""
-    
-    job_title = jd_analysis.get('job_title', 'the role')
+    candidate_links = f"LinkedIn: {personal.get('linkedin_url', '')} | GitHub: {personal.get('github_url', '')}"
+
     company = jd_analysis.get('company_name', 'your company')
+    job_title = jd_analysis.get('job_title', 'the role')
+    special_instructions = jd_analysis.get('special_instructions', 'None')
     
+    wanted_skills = [s.lower() for s in jd_analysis.get("hard_skills", [])]
+    my_skills = []
+    if "skills" in tailored_resume:
+        for item in tailored_resume["skills"]:
+            val = item.get("values", item.get("name", ""))
+            if isinstance(val, str):
+                my_skills.extend([s.strip().lower() for s in val.split(",")])
+            elif isinstance(val, list):
+                my_skills.extend([s.strip().lower() for s in val])
+
+    matching_skills = [s.title() for s in wanted_skills if s in my_skills]
+    if not matching_skills:
+        matching_skills = [s.title() for s in my_skills[:3]]
+
+    hard_skills_str = ", ".join(matching_skills[:5])
+    experience_subset = tailored_resume.get("experience", [])[:2]
+    experience_summary = json.dumps(experience_subset)
+
     try:
         prompt = f"""
-        Write a professional, concise, and enthusiastic job application email.
+        Write a concise, persuasive job application email (Subject + Body) that sounds human, specific, and natural — not AI-generated.
         
-        CONTEXT:
-        - Role: {job_title}
-        - Company: {company}
-        - Candidate Name: {candidate_name}
-        - Candidate Email: {candidate_email}
-        - Candidate Phone: {candidate_phone}
-        - Highlights: {len(tailored_resume.get('experience', []))} years of relevant experience.
+        --- SENDER IDENTITY ---
+        Name: {candidate_name}
+        Email: {candidate_email}
+        Phone: {candidate_phone}
+        Links: {candidate_links}
+        
+        --- RECIPIENT & CONTEXT ---
+        Company: {company}
+        Role: {job_title}
+        Special Application Instructions from JD: {special_instructions}
+        
+        --- MY QUALIFICATIONS ---
+        **Top Relevant Skills**: {hard_skills_str}
+        **Key Experience**: {experience_summary}
 
         INSTRUCTIONS:
         1. Keep it short (under 200 words).
-        2. Highlight specific technical skills mentioned in the resume.
-        3. STRICT REQUIREMENT: Sign off using the Candidate Name provided above. 
-        4. DO NOT use placeholders like "[Your Name]" or "[Phone Number]". If data is missing, just omit that line.
-        5. Include a professional Subject line at the very top.
+        2. STRICTLY mention the "Top Relevant Skills" listed above.
+        3. Reference the "Key Experience" to prove I am a good fit.
+        4. Sign off using the exact Sender Name provided above. 
+        5. ABSOLUTELY NO PLACEHOLDERS like "[Insert Skills]", or any other placeholders ever.
+        6. SUBJECT LINE: The VERY FIRST line of your response MUST start exactly with "Subject: " followed by the subject line. If the 'Special Application Instructions' dictate a specific subject line, you MUST use it. Otherwise, write a highly professional and tailored subject line. Leave a blank line, then begin the email body.
+        
+        OUTPUT FORMAT:
+        Subject: Your Chosen Subject Line
+        
+        Dear Hiring Team,
+        ...
         """
         return call_gemini(prompt, max_tokens=1024, temperature=0.7)
     except Exception as e:
         print(f"Email generation error: {e}")
-        return f"Subject: Application for {job_title}\n\nDear Hiring Team,\n\nI am writing to apply for the {job_title} position at {company}. Please find my resume attached.\n\nBest regards,\n\n{candidate_name}\n{candidate_email}"
-
+        return f"Subject: Application for {job_title}\n\nDear Hiring Team,\n\nI am applying for the {job_title} role. I have experience in {hard_skills_str}.\n\nBest,\n{candidate_name}"
 
 # ============================================
 # RESUME TAILOR SERVICE CLASS

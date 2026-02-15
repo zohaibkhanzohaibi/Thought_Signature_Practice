@@ -52,18 +52,60 @@ export const GenerationModal = ({ job, user, onClose, onComplete }: {
         }
     };
 
-    const handleFinish = () => {
-        const newApp = {
-            id: `a${Math.random().toString(36).substr(2, 9)}`,
-            jobId: job.id,
-            status: 'sent',
-            appliedDate: new Date().toISOString().split('T')[0],
-            createdDate: new Date().toISOString().split('T')[0],
-            lastUpdated: new Date().toISOString().split('T')[0],
-            coverLetter: coverLetter,
-            emailThread: []
-        };
-        onComplete(newApp);
+    // Inside genrationmodal.tsx -> handleFinish()
+
+    const handleFinish = async () => {
+        try {
+            // 👇 1. ADD THIS: Trigger PDF Generation on the backend first
+            console.log("📄 Generating tailored PDF resume...");
+            const pdfRes = await fetch(`http://localhost:8000/api/jobs/${job.id}/generate-pdf`, {
+                method: 'POST'
+            });
+
+            if (!pdfRes.ok) {
+                console.warn("⚠️ PDF generation failed. Email will draft without attachment.");
+            } else {
+                console.log("✅ PDF generated and saved to database.");
+            }
+
+            // 👇 2. Then proceed with creating the draft
+            const targetEmail = job.contact_email || job.company_email || job.application_email || 'hr@company.com';
+
+            const draftRes = await fetch(`http://localhost:8000/api/jobs/${job.id}/create-draft`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    to: targetEmail,
+                    subject: `Application for ${displayTitle}`, 
+                    body: coverLetter // Sends the explicitly edited UI text
+                })
+            });
+
+            if (!draftRes.ok) {
+                const errorData = await draftRes.json();
+                throw new Error(errorData.detail || 'Failed to create Gmail draft');
+            }
+
+            // 3. Draft created successfully! Update the UI state.
+            const newApp = {
+                id: job.id, 
+                jobId: job.id,
+                status: 'drafted', 
+                appliedDate: new Date().toISOString().split('T')[0],
+                createdDate: new Date().toISOString().split('T')[0],
+                lastUpdated: new Date().toISOString().split('T')[0],
+                coverLetter: coverLetter,
+                emailThread: []
+            };
+            
+            onComplete(newApp);
+
+        } catch (error: any) {
+            console.error("❌ Draft Error:", error);
+            alert(`Error creating draft: ${error.message}`);
+        }
     };
 
     const displayTitle = job.position || job.job_title || "Unknown Role";

@@ -169,7 +169,7 @@ class GmailService:
     # ============================================
     # DRAFT OPERATIONS
     # ============================================
-    
+
     def create_draft(
         self,
         to: str,
@@ -178,29 +178,17 @@ class GmailService:
         attachment_path: str = None,
         in_reply_to: str = None
     ) -> str:
-        """
-        Create a Gmail draft.
-        
-        Args:
-            to: Recipient email
-            subject: Email subject
-            body: Email body text
-            attachment_path: Optional path to file attachment
-            in_reply_to: Optional Message-ID for threading
-            
-        Returns:
-            Draft ID
-        """
         message = MIMEMultipart()
-        message['to'] = to
-        message['subject'] = subject
-        message['from'] = self.email_address
+        # 👇 FIX: Use standard RFC 2822 Title Case for headers
+        message['To'] = to
+        message['Subject'] = subject
+        message['From'] = self.email_address
         
         if in_reply_to:
             message['In-Reply-To'] = in_reply_to
             message['References'] = in_reply_to
         
-        message.attach(MIMEText(body, 'plain'))
+        message.attach(MIMEText(body, 'plain', 'utf-8'))
         
         # Add attachment if provided
         if attachment_path and os.path.exists(attachment_path):
@@ -289,19 +277,19 @@ class GmailService:
     
     def _parse_message(self, message: Dict) -> Dict:
         """Parse Gmail message into readable format."""
-        headers = {h['name']: h['value'] for h in message['payload'].get('headers', [])}
+        # 👇 FIX: Force all header keys to lowercase for safe lookups
+        headers = {h['name'].lower(): h['value'] for h in message['payload'].get('headers', [])}
         
-        # Extract body
         body = self._get_body(message['payload'])
         
         return {
             "id": message['id'],
             "thread_id": message['threadId'],
-            "subject": headers.get('Subject', ''),
-            "from": headers.get('From', ''),
-            "to": headers.get('To', ''),
-            "date": headers.get('Date', ''),
-            "message_id": headers.get('Message-ID', ''),
+            "subject": headers.get('subject', ''),
+            "from": headers.get('from', ''),
+            "to": headers.get('to', ''),
+            "date": headers.get('date', ''),
+            "message_id": headers.get('message-id', ''),
             "snippet": message.get('snippet', ''),
             "body": body,
             "labels": message.get('labelIds', [])
